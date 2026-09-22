@@ -11,7 +11,7 @@ async function bootstrap() {
 
   const config = app.get(ConfigService);
   const port = config.getOrThrow<number>('PORT');
-  const domain = config.get<number>('DOMAIN');
+  const domain = config.getOrThrow<string>('DOMAIN');
 
   await app.listen(port);
   Logger.log(`PropFlow running on ${domain}:${port}/api/v1`, 'Bootstrap');

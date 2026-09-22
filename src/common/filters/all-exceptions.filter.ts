@@ -46,35 +46,6 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   constructor(private readonly config: ConfigService) {}
 
-  catch(exception: unknown, host: ArgumentsHost): void {
-    const http = host.switchToHttp();
-    const req: Request = http.getRequest();
-    const res: Response = http.getResponse();
-
-    const { statusCode, message, details } = this.normalize(exception);
-
-    if (statusCode >= 500) {
-      this.logger.error(
-        `${req.method} ${req.originalUrl} -> ${statusCode}`,
-        exception instanceof Error ? exception.stack : String(exception),
-      );
-    } else {
-      this.logger.warn(
-        `${req.method} ${req.originalUrl} -> ${statusCode} ${message}`,
-      );
-    }
-
-    res.status(statusCode).json({
-      success: false,
-      statusCode,
-      error: HttpStatus[statusCode] ?? 'ERROR',
-      message,
-      ...(details !== undefined && { details }),
-      path: req.originalUrl,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
   private normalize(exception: unknown): NormalizedError {
     if (exception instanceof HttpException) {
       const statusCode = exception.getStatus();
@@ -104,5 +75,34 @@ export class AllExceptionsFilter implements ExceptionFilter {
           ? exception.message
           : 'Internal server error',
     };
+  }
+
+  catch(exception: unknown, host: ArgumentsHost): void {
+    const http = host.switchToHttp();
+    const req: Request = http.getRequest();
+    const res: Response = http.getResponse();
+
+    const { statusCode, message, details } = this.normalize(exception);
+
+    if (statusCode >= 500) {
+      this.logger.error(
+        `${req.method} ${req.originalUrl} -> ${statusCode}`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
+    } else {
+      this.logger.warn(
+        `${req.method} ${req.originalUrl} -> ${statusCode} ${message}`,
+      );
+    }
+
+    res.status(statusCode).json({
+      success: false,
+      statusCode,
+      error: HttpStatus[statusCode] ?? 'ERROR',
+      message,
+      ...(details !== undefined && { details }),
+      path: req.originalUrl,
+      timestamp: new Date().toISOString(),
+    });
   }
 }

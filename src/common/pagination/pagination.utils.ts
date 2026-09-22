@@ -48,5 +48,8 @@ export function resolveSort<T extends string>(
       `sortBy must be one of: ${allowed.join(', ')}`,
     );
   }
-  return { sortBy: sortBy as T, sortOrder: query.sortOrder };
+  return {
+    sortBy: sortBy as T,
+    sortOrder: query.sortOrder === SortOrder.ASC ? 'ASC' : 'DESC',
+  };
 }

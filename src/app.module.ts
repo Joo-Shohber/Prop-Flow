@@ -1,4 +1,4 @@
-import { ClassSerializerInterceptor, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -7,9 +7,14 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor.js
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js';
 import { RedisModule } from './common/redis/redis.module.js';
 import { validateEnv } from './config/env.validation.js';
+import { UsersModule } from './users/users.module.js';
+import { AuthModule } from './auth/auth.module.js';
+
 @Module({
   imports: [
     RedisModule,
+    UsersModule,
+    AuthModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,
@@ -32,7 +37,6 @@ import { validateEnv } from './config/env.validation.js';
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
-    { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },
   ],
 })
 export class AppModule {}
