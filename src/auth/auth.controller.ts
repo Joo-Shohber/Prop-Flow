@@ -1,4 +1,14 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Req,
+  Res,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -9,21 +19,28 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator.js';
-import { User } from '../users/entities/user.entity.js';
 import { UserResponseDto } from '../users/dto/user-response.dto.js';
+import { User } from '../users/entities/user.entity.js';
+import { REFRESH_TOKEN_COOKIE } from './auth.constants.js';
 import { AuthService } from './auth.service.js';
-import { AuthTokensDto, LoginResponseDto } from './dto/auth-response.dto.js';
-import { LoginDto } from './dto/login.dto.js';
-import { RefreshTokenDto } from './dto/refresh-token.dto.js';
+import { AccessTokenDto, LoginResponseDto } from './dto/auth-response.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
-import { AuthTokens } from './types/token.types.js';
+import { LoginDto } from './dto/login.dto.js';
+import {
+  clearRefreshTokenCookie,
+  setRefreshTokenCookie,
+} from './utils/refresh-cookie.util.js';
 
 @ApiTags('Auth')
 @Public()
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Post('register')
   @ApiOperation({ summary: 'Register a TENANT or OWNER account' })
@@ -37,35 +54,55 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Log in and receive an access + refresh token pair',
+    summary: 'Log in. The refresh token is set as an httpOnly cookie.',
   })
   @ApiOkResponse({ type: LoginResponseDto })
   @ApiUnauthorizedResponse({ description: 'Invalid email or password' })
   @ApiForbiddenResponse({ description: 'Account is deactivated' })
-  login(@Body() dto: LoginDto) {
-    return this.auth.login(dto);
+  async login(
+    @Body() dto: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { refreshToken, ...body } = await this.auth.login(dto);
+    setRefreshTokenCookie(res, refreshToken, this.config);
+    return body;
   }
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Rotate the refresh token and get a new token pair',
+    summary: 'Rotate the refresh token cookie and get a new access token',
   })
-  @ApiOkResponse({ type: AuthTokensDto })
+  @ApiOkResponse({ type: AccessTokenDto })
   @ApiUnauthorizedResponse({
     description:
-      'Invalid, expired or reused refresh token (a reused token revokes its whole family)',
+      'Missing, invalid, expired or reused refresh token (reuse revokes the whole session family)',
   })
-  refresh(@Body() dto: RefreshTokenDto): Promise<AuthTokens> {
-    return this.auth.refresh(dto);
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const token = req.cookies?.[REFRESH_TOKEN_COOKIE];
+    if (!token) throw new UnauthorizedException('Missing refresh token');
+
+    const { refreshToken, ...body } = await this.auth.refresh(token);
+    setRefreshTokenCookie(res, refreshToken, this.config);
+    return body;
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Revoke the session that owns this refresh token' })
+  @ApiOperation({
+    summary: 'Revoke the current session and clear the refresh token cookie',
+  })
   @ApiOkResponse({ description: 'Always succeeds (idempotent)' })
-  async logout(@Body() dto: RefreshTokenDto): Promise<null> {
-    await this.auth.logout(dto);
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<null> {
+    const token = req.cookies?.[REFRESH_TOKEN_COOKIE];
+    if (token) await this.auth.logout(token);
+    clearRefreshTokenCookie(res);
     return null;
   }
 }

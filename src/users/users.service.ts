@@ -131,7 +131,7 @@ export class UsersService {
 
     const [data, total] = await this.userRepository.findAndCount({
       where,
-      order: { [sortBy]: sortOrder } as FindOptionsOrder<User>,
+      order: { [sortBy]: sortOrder } as FindOptionsOrder<User>, // EX:- order: { email: DESC }
       skip: toSkip(query),
       take: query.limit,
     });

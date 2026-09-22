@@ -37,6 +37,7 @@ export class AuthService {
     if (await this.users.findByEmail(dto.email)) {
       throw new ConflictException('Email is already registered');
     }
+
     const { password, ...profile } = dto;
     return this.users.create({
       ...profile,
@@ -66,8 +67,8 @@ export class AuthService {
     return { user, ...tokens };
   }
 
-  async refresh(dto: RefreshTokenDto): Promise<AuthTokens> {
-    const payload = await this.verifyRefreshToken(dto.refreshToken);
+  async refresh(token: string): Promise<AuthTokens> {
+    const payload = await this.verifyRefreshToken(token);
     const record = await this.refreshTokens.findOneBy({ id: payload.jti });
 
     if (
@@ -78,11 +79,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    // Reuse detection: a rotated (revoked) token showed up again -> kill the whole family.
-    if (
-      record.revoked ||
-      !safeEqual(record.tokenHash, sha256(dto.refreshToken))
-    ) {
+    if (record.revoked || !safeEqual(record.tokenHash, sha256(token))) {
       await this.revokeFamily(record.family);
       throw new UnauthorizedException(
         'Refresh token reuse detected, please log in again',
@@ -98,7 +95,6 @@ export class AuthService {
     }
 
     const tokens = await this.dataSource.transaction(async (manager) => {
-      // Atomic: only one concurrent request can flip revoked false -> true.
       const { affected } = await manager.update(
         RefreshToken,
         { id: record.id, revoked: false },
@@ -118,9 +114,9 @@ export class AuthService {
   }
 
   /** Idempotent: an unknown or expired token is simply ignored. */
-  async logout(dto: RefreshTokenDto): Promise<void> {
+  async logout(token: string): Promise<void> {
     try {
-      const payload = await this.verifyRefreshToken(dto.refreshToken);
+      const payload = await this.verifyRefreshToken(token);
       await this.refreshTokens.update(
         { family: payload.family, userId: payload.userId },
         { revoked: true },
