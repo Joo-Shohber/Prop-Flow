@@ -1,0 +1,577 @@
+Build a backend project called **PropFlow**, a simple Property & Rental Management API, using **NestJS, TypeScript, PostgreSQL, TypeORM, and Redis**.
+
+The goal is to practice NestJS through real business logic (resource-level authorization, state machines, transactions, PostgreSQL constraints, caching, aggregate queries), not tutorial CRUD. Keep everything as small as the requirements below allow.
+
+Do NOT add features, modules, entities, endpoints, or libraries that are not listed here.
+
+==================================================
+1. SCOPE
+==================================================
+
+Included:
+- Auth (JWT access + refresh with rotation), email OTP verification and password reset, roles, resource-level authorization
+- Properties, Units, Leases
+- Maintenance requests with assignment, workflow, and status history
+- Image uploads (Cloudinary)
+- OTP emails with @nestjs-modules/mailer and EJS (OTP codes, not links)
+- In-app notifications and audit logs
+- Redis caching and rate limiting
+- One analytics dashboard endpoint
+- TypeORM migrations, Swagger
+
+Intentionally excluded (do not build):
+- Payments
+- Building entity (a unit has a `building` text label)
+- PROPERTY_MANAGER role, Inspections, Documents, Work Orders as a separate entity
+- Separate Admin or Tenants modules
+- Google OAuth (optional last phase only)
+- Domain events, scheduled jobs, automated tests (to be added later)
+
+==================================================
+2. ROLES
+==================================================
+
+Four roles: TENANT, OWNER, MAINTENANCE_STAFF, ADMIN.
+
+TENANT:
+- Manage own profile
+- View own leases (current and history)
+- Create maintenance requests for the unit they currently occupy, with images
+- Track, cancel, and close own requests
+- Receive notifications
+
+OWNER:
+- Manage own properties and the units inside them
+- Create and manage leases for own properties
+- View maintenance requests of own properties, assign them to staff, close or cancel them
+- View analytics for own properties
+
+MAINTENANCE_STAFF:
+- View only requests assigned to them
+- Start work, add notes, complete with images and a resolution description
+
+ADMIN:
+- Full access (bypasses ownership checks)
+- User management: activate/deactivate, change role
+- System-wide analytics and audit logs
+
+Registration creates TENANT or OWNER only. ADMIN and MAINTENANCE_STAFF are assigned by an admin through a role change. The first ADMIN is created by a seed script (email pre-verified).
+
+Authorization is enforced at role level AND resource level through a reusable policy layer (`common/policies`), for example canManageProperty(user, property), canAccessLease(user, lease), canAccessMaintenance(user, request). Never authorize using route params alone (prevent IDOR).
+
+==================================================
+3. MODULES AND COMMON LAYER
+==================================================
+
+Feature modules:
+
+auth, users, properties, units, leases, maintenance, notifications, analytics, audit-logs
+
+Common layer:
+- Decorators: @CurrentUser, @Roles
+- Guards: JwtAuthGuard, RolesGuard
+- Policies (resource-level authorization)
+- Interceptors: logging, response formatting
+- Global exception filter
+- Pagination/query DTOs
+- Redis module
+- UploadService (Cloudinary + file validation)
+- EmailService (Mailer + EJS templates)
+
+Controllers stay thin. Business logic lives in services. Use dependency injection properly.
+
+==================================================
+4. AUTHENTICATION
+==================================================
+
+- Register, login, logout, refresh
+- Password hashing
+- JWT access token and refresh token with separate secrets
+- Refresh token rotation with reuse detection: store hashed refresh tokens in a RefreshToken entity (jti, token family, expiry, revoked flag). Reusing an old token revokes the whole family.
+- Users cannot log in until their email is verified
+- Deactivated users cannot log in, cannot refresh, and are rejected by the guard on every request
+- Never expose passwords, tokens, or OTP codes in responses
+
+Email OTP (codes, not links):
+- Register creates the user with isEmailVerified = false and emails a 6-digit OTP.
+- POST /auth/verify-email { email, otp } marks the email as verified.
+- POST /auth/resend-verification-otp { email } sends a new code.
+- POST /auth/forgot-password { email } emails a reset OTP. Always return the same generic 200 response whether or not the email exists (no user enumeration).
+- POST /auth/reset-password { email, otp, newPassword } sets the new password and revokes all of the user's refresh tokens.
+- OTP rules: generated with crypto.randomInt, stored hashed (never plain) in Redis with a 10-minute TTL under otp:{purpose}:{email} (purposes: EMAIL_VERIFICATION, PASSWORD_RESET), single use, maximum 5 wrong attempts and then the code is invalidated, a new code replaces the previous one, and a 60-second resend cooldown. No OTP entity or table.
+- OTP emails use one reusable EJS template through EmailService.
+
+==================================================
+5. PROPERTIES
+==================================================
+
+Fields: name, description, propertyType, address, city, country, owner, images ({ url, publicId }[]), createdAt, updatedAt, deletedAt.
+
+- OWNER creates properties (owner = current user). ADMIN can create for any owner.
+- Only the owner or an admin can update, delete, or upload images.
+- Delete is a soft delete and is rejected (409) while any unit of the property is RENTED.
+- A property has many units.
+- Owners see only their own properties. Admins see all.
+- Query: search (name, address), city, propertyType, sorting, pagination.
+
+==================================================
+6. UNITS
+==================================================
+
+Fields: unitNumber, building (text label), floor, area, bedrooms, bathrooms, description, property, status, createdAt, updatedAt.
+
+Statuses and transitions:
+
+AVAILABLE -> RENTED       (only through lease activation)
+RENTED -> AVAILABLE       (only through lease termination or expiration)
+AVAILABLE -> MAINTENANCE  (manual)
+MAINTENANCE -> AVAILABLE  (manual)
+
+- PATCH /units/:id/status allows only the manual transitions. RENTED can never be set or cleared manually.
+- Any other transition is rejected.
+- unitNumber is unique within (property, building).
+- A unit that has any lease cannot be deleted (409).
+- OWNER manages units of own properties, ADMIN manages all. A TENANT can read only the unit they currently occupy.
+- Query: status, bedrooms, minArea, maxArea, propertyId, sorting, pagination.
+
+Example: GET /api/v1/units?status=AVAILABLE&bedrooms=3&minArea=100&maxArea=200&page=1&limit=20
+
+==================================================
+7. LEASES
+==================================================
+
+Fields: tenant, unit, startDate, endDate, status, notes, createdAt, updatedAt.
+(Property and owner are derived through the unit.)
+
+Statuses and transitions:
+
+PENDING -> ACTIVE
+PENDING -> TERMINATED
+ACTIVE -> TERMINATED
+ACTIVE -> EXPIRED
+
+Rules:
+- Create: OWNER (own property units) or ADMIN. Tenant must be an active user with the TENANT role. New leases start as PENDING.
+- startDate must be before endDate.
+- A lease cannot overlap another PENDING or ACTIVE lease of the same unit.
+- Update is allowed only while PENDING (dates, notes) and re-validates overlap.
+- Activate: lease must be PENDING and the unit must be AVAILABLE. Sets lease ACTIVE and unit RENTED.
+- Terminate: PENDING or ACTIVE lease becomes TERMINATED. If it was ACTIVE, the unit becomes AVAILABLE.
+- Expiration is automatic and needs no scheduler (lazy expiration): a single set-based transaction moves ACTIVE leases with endDate before today to EXPIRED and their units to AVAILABLE. Run it before unit searches and before lease reads and writes. Invalidate the related caches if any row changed.
+- Invalid transitions are rejected with a clear error.
+
+Visibility: TENANT sees only own leases (this replaces any separate "my leases" endpoint), OWNER sees leases of own properties, ADMIN sees all.
+Query: status, unitId, tenantId, sorting, pagination.
+
+==================================================
+8. MAINTENANCE
+==================================================
+
+One entity handles both the request and its assignment.
+
+MaintenanceRequest fields: title, description, category, priority, images, unit, tenant, status, assignedStaff (nullable), scheduledDate (nullable), completionImages, resolutionDescription, resolvedAt, createdAt, updatedAt.
+
+Categories: PLUMBING, ELECTRICITY, HVAC, CARPENTRY, APPLIANCES, OTHER
+Priorities: LOW, MEDIUM, HIGH, URGENT
+Statuses: OPEN, ASSIGNED, IN_PROGRESS, RESOLVED, CLOSED, CANCELLED
+
+Workflow:
+
+OPEN -> ASSIGNED -> IN_PROGRESS -> RESOLVED -> CLOSED
+OPEN or ASSIGNED -> CANCELLED
+
+Actions:
+- Create (TENANT): the unit is derived from the tenant's ACTIVE lease (no unitId in the body). Rejected if the tenant has no active lease. Up to 5 images.
+- Assign (OWNER of the property, or ADMIN): from OPEN only. Assignee must be an active MAINTENANCE_STAFF. Optional scheduledDate.
+- Start (assigned staff only): ASSIGNED -> IN_PROGRESS.
+- Complete (assigned staff only): IN_PROGRESS -> RESOLVED. resolutionDescription is required, completion images up to 5. Sets resolvedAt.
+- Close (the request's tenant, the property's owner, or ADMIN): RESOLVED -> CLOSED.
+- Cancel (the request's tenant, the property's owner, or ADMIN): from OPEN or ASSIGNED.
+- Every transition writes a MaintenanceStatusHistory row: request, previousStatus, newStatus, changedBy, notes (optional), createdAt.
+- Invalid transitions are rejected.
+
+Visibility: TENANT sees own requests, OWNER sees requests of own properties, MAINTENANCE_STAFF sees only requests assigned to them, ADMIN sees all.
+Query: status, priority, category, sorting, pagination.
+
+==================================================
+9. FILE UPLOADS
+==================================================
+
+One reusable UploadService (Cloudinary), used for:
+- Property images
+- Maintenance images
+- Completion images
+
+Images are stored as { url, publicId } references on the owning entity (jsonb). Never store files in PostgreSQL.
+
+Validate MIME type (check real file content, not only client metadata), extension, file size, and maximum number of files. Delete the Cloudinary asset when a reference is removed. Document upload endpoints in Swagger (multipart/form-data).
+
+==================================================
+10. NOTIFICATIONS AND AUDIT LOGS
+==================================================
+
+Both are plain reusable services (NotificationsService, AuditLogsService) called directly from business services. They write inside the same database transaction as the operation, using the same EntityManager.
+
+Notifications are in-app only. The only emails the system sends are OTP emails (see Authentication).
+
+Notification fields: recipient, type, title, message, isRead, related entity (type + id), createdAt.
+
+Create notifications for:
+- LEASE_CREATED, LEASE_ACTIVATED, LEASE_TERMINATED (to the tenant)
+- MAINTENANCE_CREATED (to the property owner)
+- MAINTENANCE_ASSIGNED (to the staff member and the tenant)
+- MAINTENANCE_RESOLVED (to the tenant and the owner)
+- ACCOUNT_STATUS_CHANGED (to the affected user)
+
+Endpoints: list (paginated, `unread=true` filter, unread count in the response meta), mark one as read, mark all as read. Users only access their own notifications.
+
+AuditLog fields: user, action, entity, entityId, metadata (jsonb), ipAddress, createdAt.
+
+Actions: PROPERTY_DELETED, LEASE_CREATED, LEASE_ACTIVATED, LEASE_TERMINATED, UNIT_STATUS_CHANGED, MAINTENANCE_ASSIGNED, MAINTENANCE_COMPLETED, USER_STATUS_CHANGED, ROLE_CHANGED.
+
+Keep it simple. No complicated audit system. ADMIN can list audit logs with filters (action, entity, userId) and pagination.
+
+==================================================
+11. REDIS
+==================================================
+
+Caching (nothing else is cached):
+- Available/units search results: units:search:{hash}
+- Dashboard statistics: dashboard:stats:{scope} (per owner or admin)
+
+Invalidation:
+- Unit changes, lease activation/termination/expiration: invalidate units search and dashboard stats
+- Property changes and maintenance status changes: invalidate dashboard stats
+
+Add a short TTL as a safety net. Do not cache anything else.
+
+OTP storage: OTP codes, attempt counters, and resend cooldowns live in Redis with TTLs (see Authentication).
+
+Rate limiting with @nestjs/throttler using Redis storage: a global limit, and stricter limits on auth endpoints (login, register, OTP, forgot/reset password).
+
+==================================================
+12. SEARCH, FILTERING, SORTING, PAGINATION
+==================================================
+
+Create reusable pagination, sorting, and query DTOs (page, limit, sortBy, sortOrder). Whitelist sortable fields per resource. Never pass raw client input into ORDER BY. List responses return data plus pagination meta.
+
+==================================================
+13. ANALYTICS
+==================================================
+
+One endpoint: GET /api/v1/analytics/dashboard
+
+Returns:
+- Total properties, total units
+- Occupied units, available units, occupancy rate
+- Active leases, expired leases
+- Open maintenance requests, resolved maintenance requests
+- Average maintenance resolution time
+- Most common maintenance categories
+
+Use aggregate SQL queries (COUNT, AVG, GROUP BY) through TypeORM QueryBuilder. Never load large datasets into memory.
+
+Scope: OWNER sees only own properties, ADMIN sees system-wide. Other roles get 403. Result is cached (see Redis).
+
+==================================================
+14. DATABASE
+==================================================
+
+Entities:
+
+User, RefreshToken, Property, Unit, Lease, MaintenanceRequest, MaintenanceStatusHistory, Notification, AuditLog
+
+User includes isEmailVerified (boolean, default false). OTP codes are stored in Redis, not in the database.
+
+Use One-to-Many and Many-to-One relations, foreign keys, enums, createdAt/updatedAt, and soft delete on Property only. No Many-to-Many. synchronize must be false; use TypeORM migrations.
+
+Required constraints and indexes:
+- User email unique
+- Unit unique on (property, building, unitNumber)
+- Only one ACTIVE lease per unit (partial unique index)
+- No overlapping PENDING/ACTIVE leases per unit (PostgreSQL exclusion constraint with btree_gist on the date range)
+- CHECK (startDate < endDate) on leases
+- Indexes on foreign keys
+- Property: (owner), (city), (propertyType)
+- Unit: (status), (property), (bedrooms)
+- Lease: (unit), (tenant), (status), (status, endDate)
+- Maintenance: (status), (priority), (unit), (assignedStaff)
+- Notification: (recipient, isRead)
+
+Migrations are added phase by phase with the entities they belong to. Include a seed script for the first ADMIN (isEmailVerified = true).
+
+==================================================
+15. TRANSACTIONS
+==================================================
+
+Use QueryRunner or the TypeORM transaction manager. Notification and audit records are created inside the same transaction.
+
+Lease activation:
+1. Lock and validate the lease
+2. Validate the unit and conflicts
+3. Update lease and unit
+4. Create notification and audit record
+5. Commit, then invalidate cache
+
+Lease termination:
+1. Validate lease
+2. Update lease and (if it was ACTIVE) the unit
+3. Create notification and audit record
+4. Commit, then invalidate cache
+
+Maintenance assignment (and every other maintenance transition):
+1. Validate request, actor, and (for assignment) the staff member
+2. Update the request
+3. Create status history row, notification, and audit record
+4. Commit, then invalidate cache
+
+Handle concurrent activation safely (row locking and/or the database constraints).
+
+==================================================
+16. SECURITY AND ERROR HANDLING
+==================================================
+
+- Helmet, CORS with configured origins
+- ValidationPipe with whitelist and forbidNonWhitelisted
+- Rate limiting, password hashing, separate JWT secrets
+- Role-based and resource-level authorization, no IDOR
+- Secure file validation
+- No sensitive data in responses
+
+Consistent error format via a global exception filter. Use 400, 401, 403, 404, 409, 422, 429, 500 appropriately. Business rule violations return meaningful messages. Map PostgreSQL constraint violations (unique, exclusion, check) to 409 or 422. Never expose stack traces or database errors in production.
+
+==================================================
+17. API STRUCTURE
+==================================================
+
+Base path: /api/v1
+
+AUTH:
+POST   /auth/register
+POST   /auth/login
+POST   /auth/refresh
+POST   /auth/logout
+POST   /auth/verify-email
+POST   /auth/resend-verification-otp
+POST   /auth/forgot-password
+POST   /auth/reset-password
+
+USERS:
+GET    /users/me
+PATCH  /users/me
+GET    /users                          (ADMIN)
+PATCH  /users/:id/status               (ADMIN)
+PATCH  /users/:id/role                 (ADMIN)
+
+PROPERTIES:
+GET    /properties
+POST   /properties
+GET    /properties/:id
+PATCH  /properties/:id
+DELETE /properties/:id
+POST   /properties/:id/images
+
+UNITS:
+GET    /units
+POST   /properties/:propertyId/units
+GET    /units/:id
+PATCH  /units/:id
+DELETE /units/:id
+PATCH  /units/:id/status
+
+LEASES:
+GET    /leases
+POST   /leases
+GET    /leases/:id
+PATCH  /leases/:id
+POST   /leases/:id/activate
+POST   /leases/:id/terminate
+
+MAINTENANCE:
+GET    /maintenance
+POST   /maintenance                    (multipart, images)
+GET    /maintenance/:id
+POST   /maintenance/:id/assign
+POST   /maintenance/:id/start
+POST   /maintenance/:id/complete       (multipart, completion images)
+POST   /maintenance/:id/close
+POST   /maintenance/:id/cancel
+GET    /maintenance/:id/history
+
+NOTIFICATIONS:
+GET    /notifications
+PATCH  /notifications/:id/read
+PATCH  /notifications/read-all
+
+ANALYTICS:
+GET    /analytics/dashboard
+
+AUDIT LOGS:
+GET    /audit-logs                     (ADMIN)
+
+==================================================
+18. SWAGGER
+==================================================
+
+Document every endpoint with tags, Bearer auth, required roles, DTO fields, query/path parameters, success and error responses, file uploads, and pagination.
+
+==================================================
+19. FOLDER STRUCTURE
+==================================================
+
+src/
+├── main.ts
+├── app.module.ts
+│
+├── common/
+│   ├── decorators/
+│   ├── guards/
+│   ├── policies/
+│   ├── interceptors/
+│   ├── filters/
+│   ├── pagination/
+│   ├── redis/
+│   ├── uploads/
+│   ├── mail/
+│   └── utils/
+│
+├── config/
+├── database/
+│   ├── migrations/
+│   ├── seeds/
+│   └── data-source.ts
+│
+├── auth/
+├── users/
+├── properties/
+├── units/
+├── leases/
+├── maintenance/
+├── notifications/
+├── analytics/
+└── audit-logs/
+
+Each feature module contains only the files it needs (dto/, entities/, controller, service, module).
+
+==================================================
+20. CONFIGURATION AND DEPLOYMENT
+==================================================
+
+Use ConfigModule with validation of required variables. Create .env.example with placeholders only:
+
+NODE_ENV
+PORT
+CORS_ORIGINS
+DATABASE_URL
+REDIS_HOST
+REDIS_PORT
+REDIS_PASSWORD
+JWT_ACCESS_SECRET
+JWT_REFRESH_SECRET
+JWT_ACCESS_EXPIRES_IN
+JWT_REFRESH_EXPIRES_IN
+CLOUDINARY_CLOUD_NAME
+CLOUDINARY_API_KEY
+CLOUDINARY_API_SECRET
+SMTP_HOST
+SMTP_PORT
+SMTP_USER
+SMTP_PASSWORD
+MAIL_FROM
+SEED_ADMIN_EMAIL
+SEED_ADMIN_PASSWORD
+
+Never include real credentials or hardcode environment-specific values.
+
+Deployment: production PostgreSQL, production Redis, Cloudinary, environment variables only. The API must be deployable to Vercel where appropriate. No background workers are required. Run migrations through the CLI before start and verify they run cleanly on an empty database.
+
+==================================================
+21. BUSINESS RULES (MANDATORY)
+==================================================
+
+1. A rented unit cannot be rented again, and a unit cannot have multiple active leases.
+2. Overlapping lease dates for the same unit are rejected.
+3. Lease startDate must be before endDate.
+4. RENTED status is set and cleared only by lease flows, never manually.
+5. Invalid unit, lease, and maintenance transitions are rejected.
+6. A tenant can only access their own leases, requests, and notifications.
+7. A tenant can only create maintenance requests for the unit they currently occupy.
+8. Owners can only manage their own properties, units, and leases.
+9. Maintenance staff can only access requests assigned to them.
+10. Users cannot access another user's private resources by changing an ID in the URL.
+11. Deactivated users cannot authenticate or perform protected actions, and users cannot log in before verifying their email.
+12. Overdue active leases are expired automatically and release their unit.
+13. Cache is invalidated when relevant data changes.
+14. Important operations create notifications and audit logs inside the same transaction.
+15. Multi-record changes use transactions.
+16. OTP codes are hashed, single use, expire after 10 minutes, and are invalidated after 5 wrong attempts.
+
+==================================================
+22. DEVELOPMENT APPROACH
+==================================================
+
+Do NOT generate the whole project in one step. Build phase by phase.
+
+Before writing code, provide a short plan:
+1. Architecture and module structure
+2. ERD description, entities, and relationships
+3. API endpoint list
+4. Authentication flow (including OTP) and authorization strategy (including the policy layer)
+5. Redis caching strategy
+6. Upload strategy
+7. Main business rules
+8. Folder structure and roadmap
+
+Then implement phase by phase. Each phase must produce working code that compiles, integrate with previous phases, follow the existing architecture, avoid unnecessary rewrites, and include DTOs, validation, authorization, Swagger documentation, and migrations where required.
+
+==================================================
+23. PHASES
+==================================================
+
+Phase 1:
+Project setup, ConfigModule, PostgreSQL, TypeORM, migrations setup, common infrastructure (pagination, response interceptor, exception filter, logging), Redis module, validation, Helmet/CORS, Swagger.
+
+Phase 2:
+Users and auth: register, login, logout, refresh rotation with reuse detection, guards, decorators, policy foundation, admin seed, /users/me, admin user status and role management.
+
+Phase 3:
+Email OTP: EmailService with the OTP EJS template, OTP storage in Redis, email verification, resend, forgot/reset password, login blocked until the email is verified.
+
+Phase 4:
+Properties and units: relations, ownership authorization, search/filter/sort/pagination, unit state machine, UploadService and property images.
+
+Phase 5:
+Leases: state machine, transactions, PostgreSQL constraints (partial unique index, exclusion constraint), lazy expiration.
+
+Phase 6:
+Maintenance: workflow, assignment, staff authorization, status history, maintenance and completion image uploads.
+
+Phase 7:
+Notifications and audit logs, wired into the existing business operations inside their transactions.
+
+Phase 8:
+Redis caching with invalidation, rate limiting, and the analytics dashboard with aggregate queries.
+
+Phase 9:
+Hardening and delivery: index review, security review, error handling review, Swagger completion, production configuration, migration verification, deployment preparation.
+
+Optional Phase 10 (only if wanted):
+Google OAuth with Passport.
+
+==================================================
+24. QUALITY REQUIREMENTS
+==================================================
+
+The final project must:
+- Be written in TypeScript and use NestJS properly
+- Use PostgreSQL, TypeORM, and migrations (synchronize: false)
+- Use Redis only where it helps
+- Use JWT with refresh token rotation
+- Use RBAC plus resource-level authorization through a policy layer
+- Use DTO validation, transactions, indexes, and database constraints where required
+- Keep controllers thin and business logic in services
+- Avoid unnecessary abstraction, features, and hardcoded secrets
+- Avoid exposing sensitive data
+- Be production-oriented and suitable for a backend portfolio
+
+The most important requirement: PropFlow should demonstrate real backend engineering and business logic, not just CRUD endpoints.
