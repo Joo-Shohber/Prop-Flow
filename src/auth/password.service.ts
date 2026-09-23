@@ -20,7 +20,7 @@ export class PasswordService {
     }
   }
 
-  /** Burns the same time as a real check, so login timing can't reveal unknown emails. */
+  /** Burns the same time as a real check, so login timing can't reveal not found emails. */
   async verifyDummy(password: string): Promise<void> {
     this.dummyHash ??= this.hash(randomBytes(16).toString('hex'));
     await this.verify(await this.dummyHash, password);

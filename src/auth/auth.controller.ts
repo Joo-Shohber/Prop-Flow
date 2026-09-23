@@ -102,7 +102,7 @@ export class AuthController {
   ): Promise<null> {
     const token = req.cookies?.[REFRESH_TOKEN_COOKIE];
     if (token) await this.auth.logout(token);
-    clearRefreshTokenCookie(res);
+    clearRefreshTokenCookie(res, this.config);
     return null;
   }
 }

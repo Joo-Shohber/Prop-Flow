@@ -7,7 +7,6 @@ import { RolesGuard } from '../common/guards/roles.guard.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
-// import { RefreshToken } from './entities/refresh-token.entity.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 import { PasswordService } from './password.service.js';
 

@@ -6,13 +6,13 @@ import {
   REFRESH_TOKEN_COOKIE_PATH,
 } from '../auth.constants.js';
 
-// sameSite 'none' (cross-domain frontend) requires secure:true unconditionally —
-// the browser drops the cookie otherwise. Needs HTTPS even locally.
-function baseCookieOptions(): CookieOptions {
+function baseCookieOptions(config: ConfigService): CookieOptions {
+  const production = config.get<string>('NODE_ENV') === 'production';
+
   return {
     httpOnly: true,
-    secure: true,
-    sameSite: 'none',
+    secure: production,
+    sameSite: production ? 'none' : 'lax',
     path: REFRESH_TOKEN_COOKIE_PATH,
   };
 }
@@ -23,11 +23,16 @@ export function setRefreshTokenCookie(
   config: ConfigService,
 ): void {
   const maxAge =
-    durationToSeconds(config.getOrThrow<string>('JWT_REFRESH_EXPIRES_IN')) *
-    1000;
-  res.cookie(REFRESH_TOKEN_COOKIE, token, { ...baseCookieOptions(), maxAge });
+    durationToSeconds(config.getOrThrow<string>('JWT_REFRESH_EXPIRES_IN')) * 1000;
+  res.cookie(REFRESH_TOKEN_COOKIE, token, {
+    ...baseCookieOptions(config),
+    maxAge,
+  });
 }
 
-export function clearRefreshTokenCookie(res: Response): void {
-  res.clearCookie(REFRESH_TOKEN_COOKIE, baseCookieOptions());
+export function clearRefreshTokenCookie(
+  res: Response,
+  config: ConfigService,
+): void {
+  res.clearCookie(REFRESH_TOKEN_COOKIE, baseCookieOptions(config));
 }

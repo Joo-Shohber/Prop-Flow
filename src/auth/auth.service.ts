@@ -6,7 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, TokenExpiredError } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { durationToSeconds } from '../common/utils/duration.util.js';
@@ -14,9 +14,7 @@ import { safeEqual, sha256 } from '../common/utils/hash.util.js';
 import { User } from '../users/entities/user.entity.js';
 import { UsersService } from '../users/users.service.js';
 import { LoginDto } from './dto/login.dto.js';
-import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
-
 import { PasswordService } from './password.service.js';
 import { AuthTokens, RefreshTokenPayload } from './types/token.types.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
@@ -33,6 +31,14 @@ export class AuthService {
     private readonly refreshTokens: Repository<RefreshToken>,
   ) {}
 
+  /**
+   * Registers a new user account.
+   * Checks whether the email is already registered, hashes the user's
+   * password, and creates a new user with the remaining profile data.
+   * @param dto Registration data containing the user's profile and password.
+   * @returns The newly created user.
+   * @throws ConflictException If the email is already registered.
+   */
   async register(dto: RegisterDto): Promise<User> {
     if (await this.users.findByEmail(dto.email)) {
       throw new ConflictException('Email is already registered');
@@ -45,6 +51,15 @@ export class AuthService {
     });
   }
 
+  /**
+   * Authenticates a user and issues access and refresh tokens.
+   * Uses a dummy password hash verification when the email does not exist
+   * to reduce timing differences that could otherwise reveal whether an email is registered.
+   * @param dto Login credentials containing email and password.
+   * @returns The authenticated user and newly issued tokens.
+   * @throws UnauthorizedException If the email or password is invalid.
+   * @throws ForbiddenException If the account has been deactivated.
+   */
   async login(dto: LoginDto): Promise<AuthTokens & { user: User }> {
     const invalid = new UnauthorizedException('Invalid email or password');
 
@@ -53,43 +68,62 @@ export class AuthService {
       await this.passwords.verifyDummy(dto.password);
       throw invalid;
     }
+
     if (
       !(await this.passwords.verify(credentials.passwordHash, dto.password))
     ) {
       throw invalid;
     }
+
     if (!credentials.isActive) {
       throw new ForbiddenException('This account has been deactivated');
     }
 
-    const tokens = await this.issueTokens(credentials.id, randomUUID());
+    const family = randomUUID();
+    const tokens = await this.issueTokens(credentials.id, family);
     const user = await this.users.findById(credentials.id);
     return { user, ...tokens };
   }
 
+  /**
+   * Rotates a refresh token and issues a new access and refresh token pair.
+   * The current refresh token is revoked before a new token is issued.
+   * Refresh tokens belong to a token family, allowing the entire family
+   * to be revoked if token reuse is detected.
+   * @param token The refresh token provided by the client.
+   * @returns A newly issued access and refresh token pair.
+   * @throws UnauthorizedException If the token is invalid, expired, revoked,
+   * mismatched, reused, or belongs to an inactive account.
+   */
   async refresh(token: string): Promise<AuthTokens> {
     const payload = await this.verifyRefreshToken(token);
-    const record = await this.refreshTokens.findOneBy({ id: payload.jti });
+    const refreshToken = await this.refreshTokens.findOneBy({
+      id: payload.jti,
+    });
 
     if (
-      !record ||
-      record.userId !== payload.userId ||
-      record.family !== payload.family
+      !refreshToken ||
+      refreshToken.userId !== payload.userId ||
+      refreshToken.family !== payload.family
     ) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    if (record.revoked || !safeEqual(record.tokenHash, sha256(token))) {
-      await this.revokeFamily(record.family);
+    if (
+      refreshToken.revoked ||
+      !safeEqual(refreshToken.tokenHash, sha256(token))
+    ) {
+      await this.revokeFamily(refreshToken.family);
       throw new UnauthorizedException(
         'Refresh token reuse detected, please log in again',
       );
     }
-    if (record.expiresAt.getTime() <= Date.now()) {
+
+    if (refreshToken.expiresAt.getTime() <= Date.now()) {
       throw new UnauthorizedException('Refresh token expired');
     }
 
-    const user = await this.users.findById(record.userId);
+    const user = await this.users.findById(refreshToken.userId);
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Account is not active');
     }
@@ -97,26 +131,36 @@ export class AuthService {
     const tokens = await this.dataSource.transaction(async (manager) => {
       const { affected } = await manager.update(
         RefreshToken,
-        { id: record.id, revoked: false },
+        { id: refreshToken.id, revoked: false },
         { revoked: true },
       );
       if (!affected) return null;
-      return this.issueTokens(user.id, record.family, manager);
+
+      return this.issueTokens(user.id, refreshToken.family, manager);
     });
 
     if (!tokens) {
-      await this.revokeFamily(record.family);
+      await this.revokeFamily(refreshToken.family);
       throw new UnauthorizedException(
         'Refresh token reuse detected, please log in again',
       );
     }
+
     return tokens;
   }
 
-  /** Idempotent: an unknown or expired token is simply ignored. */
+  /**
+   * Logs out the user by revoking the refresh token family.
+   * Invalid or expired refresh tokens are silently ignored because logout
+   * should remain idempotent and should not fail when the token is already
+   * invalid or expired.
+   * @param token The refresh token provided by the client.
+   * @returns Resolves when the logout operation is completed.
+   */
   async logout(token: string): Promise<void> {
     try {
       const payload = await this.verifyRefreshToken(token);
+
       await this.refreshTokens.update(
         { family: payload.family, userId: payload.userId },
         { revoked: true },
@@ -132,6 +176,7 @@ export class AuthService {
     manager?: EntityManager,
   ): Promise<AuthTokens> {
     const jti = randomUUID();
+
     const accessTtl = durationToSeconds(
       this.config.getOrThrow<string>('JWT_ACCESS_EXPIRES_IN'),
     );
@@ -141,7 +186,7 @@ export class AuthService {
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwt.signAsync(
-        { sub: userId },
+        { userId },
         {
           secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'),
           expiresIn: accessTtl,
@@ -149,7 +194,7 @@ export class AuthService {
         },
       ),
       this.jwt.signAsync(
-        { sub: userId, jti, family },
+        { userId, jti, family },
         {
           secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
           expiresIn: refreshTtl,
@@ -158,10 +203,11 @@ export class AuthService {
       ),
     ]);
 
-    const repo = manager
+    const refreshTokensRepo = manager
       ? manager.getRepository(RefreshToken)
       : this.refreshTokens;
-    await repo.insert({
+
+    await refreshTokensRepo.insert({
       id: jti,
       userId,
       family,
@@ -180,6 +226,7 @@ export class AuthService {
         secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
         algorithms: ['HS256'],
       });
+
       if (
         typeof payload.userId !== 'string' ||
         typeof payload.jti !== 'string' ||
@@ -187,9 +234,14 @@ export class AuthService {
       ) {
         throw new Error('malformed payload');
       }
+
       return payload;
-    } catch {
-      throw new UnauthorizedException('Invalid or expired refresh token');
+    } catch (error) {
+      if (error instanceof TokenExpiredError) {
+        throw new UnauthorizedException('Expired refresh token');
+      }
+
+      throw new UnauthorizedException('Invalid refresh token');
     }
   }
 
