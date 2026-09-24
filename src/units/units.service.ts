@@ -20,6 +20,7 @@ import { ListUnitsQueryDto } from './dto/list-units-query.dto.js';
 import { UpdateUnitDto } from './dto/update-unit.dto.js';
 import { Unit } from './entities/unit.entity.js';
 import { UnitStatus } from './enums/unit-status.enum.js';
+import { LeaseExpirationService } from '../common/lease-expiration/lease-expiration.service.js';
 
 const UNIT_SORT_FIELDS = [
   'createdAt',
@@ -38,6 +39,7 @@ export class UnitsService {
   constructor(
     @InjectRepository(Unit) private readonly unitRepo: Repository<Unit>,
     private readonly propertiesService: PropertiesService,
+    private readonly expiration: LeaseExpirationService,
   ) {}
 
   /**
@@ -82,6 +84,8 @@ export class UnitsService {
     actor: User,
     query: ListUnitsQueryDto,
   ): Promise<Paginated<Unit>> {
+    await this.expiration.run();
+
     const { sortBy, sortOrder } = resolveSort(
       query,
       UNIT_SORT_FIELDS,

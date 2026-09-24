@@ -12,15 +12,19 @@ import { AuthModule } from './auth/auth.module.js';
 import { UploadsModule } from './common/uploads/uploads.module.js';
 import { PropertiesModule } from './properties/properties.module.js';
 import { UnitsModule } from './units/units.module.js';
+import { LeaseExpirationModule } from './common/lease-expiration/lease-expiration.module.js';
+import { LeasesModule } from './leases/leases.module.js';
 
 @Module({
   imports: [
     RedisModule,
     UploadsModule,
+    LeaseExpirationModule,
     UsersModule,
     AuthModule,
     PropertiesModule,
     UnitsModule,
+    LeasesModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,
