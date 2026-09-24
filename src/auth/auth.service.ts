@@ -264,7 +264,7 @@ export class AuthService {
       const payload = await this.verifyRefreshToken(token);
 
       await this.refreshTokens.update(
-        { family: payload.family, userId: payload.userId },
+        { family: payload.family, userId: payload.userId, revoked: false },
         { revoked: true },
       );
     } catch {

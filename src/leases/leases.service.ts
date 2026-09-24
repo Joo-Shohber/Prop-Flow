@@ -111,9 +111,7 @@ export class LeasesService {
     if (query.unitId)
       queryBuilder.andWhere('lease.unitId = :unitId', { unitId: query.unitId });
     if (query.tenantId)
-      queryBuilder.andWhere('lease.tenantId = :tenantId', {
-        tenantId: query.tenantId,
-      });
+      queryBuilder.andWhere('lease.tenantId = :tenantId', { tenantId: query.tenantId });
 
     const [data, total] = await queryBuilder
       .orderBy(`lease.${sortBy}`, sortOrder)

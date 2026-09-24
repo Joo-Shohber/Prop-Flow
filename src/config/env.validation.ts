@@ -40,7 +40,7 @@ const envSchema = z.object({
   CLOUDINARY_API_SECRET: z.string().min(1),
 });
 
-export type Env = z.infer<typeof envSchema>;
+type Env = z.infer<typeof envSchema>;
 
 export function validateEnv(config: Record<string, unknown>): Env {
   const result = envSchema.safeParse(config);

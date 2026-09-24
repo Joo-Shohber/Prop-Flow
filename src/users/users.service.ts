@@ -35,7 +35,8 @@ export interface CreateUserData {
 @Injectable()
 export class UsersService {
   constructor(
-    @InjectRepository(User) private readonly userRepository: Repository<User>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
   ) {}
 
   /**
@@ -45,7 +46,7 @@ export class UsersService {
    * @throws NotFoundException If no user exists with the given ID.
    */
   async findById(id: string): Promise<User> {
-    const user = await this.userRepository.findOneBy({ id });
+    const user = await this.userRepo.findOneBy({ id });
 
     if (!user) {
       throw new NotFoundException('User not found');
@@ -60,7 +61,7 @@ export class UsersService {
    * @returns The user if found, otherwise `null`.
    */
   findByEmail(email: string): Promise<User | null> {
-    return this.userRepository.findOneBy({ email });
+    return this.userRepo.findOneBy({ email });
   }
 
   /**
@@ -72,10 +73,18 @@ export class UsersService {
    */
   findCredentialsByEmail(
     email: string,
-  ): Promise<Pick<User, 'id' | 'passwordHash' | 'isActive' | 'isEmailVerified'> | null> {
-    return this.userRepository
+  ): Promise<Pick<
+    User,
+    'id' | 'passwordHash' | 'isActive' | 'isEmailVerified'
+  > | null> {
+    return this.userRepo
       .createQueryBuilder('user')
-      .select(['user.id', 'user.passwordHash', 'user.isActive', 'user.isEmailVerified'])
+      .select([
+        'user.id',
+        'user.passwordHash',
+        'user.isActive',
+        'user.isEmailVerified',
+      ])
       .where('user.email = :email', { email })
       .getOne();
   }
@@ -88,9 +97,7 @@ export class UsersService {
    * @returns The newly created user.
    */
   async create(data: CreateUserData): Promise<User> {
-    const saved = await this.userRepository.save(
-      this.userRepository.create(data),
-    );
+    const saved = await this.userRepo.save(this.userRepo.create(data));
 
     return this.findById(saved.id);
   }
@@ -101,7 +108,7 @@ export class UsersService {
    * @returns A promise that resolves when the update is completed.
    */
   async makeEmailVerified(id: string): Promise<void> {
-    await this.userRepository.update({ id }, { isEmailVerified: true });
+    await this.userRepo.update({ id }, { isEmailVerified: true });
   }
 
   /**
@@ -111,9 +118,9 @@ export class UsersService {
    * @returns The updated user.
    */
   updateProfile(user: User, dto: UpdateProfileDto): Promise<User> {
-    this.userRepository.merge(user, dto);
+    this.userRepo.merge(user, dto);
 
-    return this.userRepository.save(user);
+    return this.userRepo.save(user);
   }
 
   /**
@@ -138,7 +145,7 @@ export class UsersService {
       where.isActive = query.isActive;
     }
 
-    const [data, total] = await this.userRepository.findAndCount({
+    const [data, total] = await this.userRepo.findAndCount({
       where,
       order: { [sortBy]: sortOrder } as FindOptionsOrder<User>, // EX:- order: { email: DESC }
       skip: toSkip(query),
@@ -169,7 +176,7 @@ export class UsersService {
     const user = await this.findById(id);
     user.isActive = isActive;
 
-    return this.userRepository.save(user);
+    return this.userRepo.save(user);
   }
 
   /**
@@ -191,6 +198,6 @@ export class UsersService {
     const user = await this.findById(id);
     user.role = role;
 
-    return this.userRepository.save(user);
+    return this.userRepo.save(user);
   }
 }

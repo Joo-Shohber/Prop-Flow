@@ -32,9 +32,10 @@ export class PropertiesService {
   constructor(
     @InjectRepository(Property)
     private readonly propertyRepo: Repository<Property>,
-    @InjectRepository(Unit) private readonly unitsRepo: Repository<Unit>,
+    @InjectRepository(Unit)
+    private readonly unitsRepo: Repository<Unit>,
     private readonly usersService: UsersService,
-    private readonly uploads: UploadService,
+    private readonly uploadService: UploadService,
   ) {}
 
   /**
@@ -187,7 +188,7 @@ export class PropertiesService {
       );
     }
 
-    const uploadedImages = await this.uploads.uploadImages(
+    const uploadedImages = await this.uploadService.uploadImages(
       files,
       'propflow/properties',
       PROPERTY_MAX_IMAGES,
