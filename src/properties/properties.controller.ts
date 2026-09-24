@@ -16,6 +16,7 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
+  ApiBody,
   ApiConflictResponse,
   ApiConsumes,
   ApiCreatedResponse,
@@ -121,6 +122,14 @@ export class PropertiesController {
     summary: `Upload property images (max ${PROPERTY_MAX_IMAGES}, jpeg/png/webp)`,
   })
   @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        images: { type: 'array', items: { type: 'string', format: 'binary' } },
+      },
+    },
+  })
   @ApiOkResponse({ type: PropertyResponseDto })
   @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })
   @ApiConflictResponse({

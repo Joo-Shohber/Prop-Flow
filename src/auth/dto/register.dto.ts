@@ -28,7 +28,7 @@ export class RegisterDto {
   @MaxLength(100)
   lastName: string;
 
-  @ApiProperty({ example: 'user@example.com' })
+  @ApiProperty({ example: 'user@gmail.com' })
   @Transform(normalizeEmail)
   @IsEmail()
   @MaxLength(255)
