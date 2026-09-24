@@ -9,12 +9,18 @@ import { RedisModule } from './common/redis/redis.module.js';
 import { validateEnv } from './config/env.validation.js';
 import { UsersModule } from './users/users.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { UploadsModule } from './common/uploads/uploads.module.js';
+import { PropertiesModule } from './properties/properties.module.js';
+import { UnitsModule } from './units/units.module.js';
 
 @Module({
   imports: [
     RedisModule,
+    UploadsModule,
     UsersModule,
     AuthModule,
+    PropertiesModule,
+    UnitsModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,

@@ -1,0 +1,8 @@
+export enum PropertyType {
+  APARTMENT = 'APARTMENT',
+  VILLA = 'VILLA',
+  STUDIO = 'STUDIO',
+  TOWNHOUSE = 'TOWNHOUSE',
+  COMMERCIAL = 'COMMERCIAL',
+  OTHER = 'OTHER',
+}
