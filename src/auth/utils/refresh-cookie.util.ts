@@ -4,7 +4,7 @@ import { durationToSeconds } from '../../common/utils/duration.util.js';
 import {
   REFRESH_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE_PATH,
-} from '../auth.constants.js';
+} from '../constants/auth.constants.js';
 
 function baseCookieOptions(config: ConfigService): CookieOptions {
   const production = config.get<string>('NODE_ENV') === 'production';

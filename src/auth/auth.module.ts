@@ -9,10 +9,13 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 import { PasswordService } from './password.service.js';
+import { MailModule } from '../common/mail/mail.module.js';
+import { OtpService } from './otp.service.js';
 
 @Module({
   imports: [
     UsersModule,
+    MailModule,
     TypeOrmModule.forFeature([RefreshToken]),
     JwtModule.register({}),
   ],
@@ -20,6 +23,7 @@ import { PasswordService } from './password.service.js';
   providers: [
     AuthService,
     PasswordService,
+    OtpService,
     // Global guards, in order: authenticate first, then check roles.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },

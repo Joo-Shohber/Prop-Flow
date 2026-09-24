@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+
+<body style="font-family:Arial,sans-serif;background:#f4f5f7;margin:0;padding:24px;">
+  <table role="presentation" width="100%"
+    style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:8px;padding:32px;">
+    <tr>
+      <td>
+        <h2 style="margin:0 0 16px;color:#111827;">
+          <%= title %>
+        </h2>
+        <p style="color:#374151;line-height:1.5;">
+          <%= message %>
+        </p>
+        <p style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#111827;text-align:center;margin:24px 0;">
+          <%= code %>
+        </p>
+        <p style="color:#6b7280;font-size:13px;">This code expires in <%= expiresInMinutes %> minutes. If you didn't
+            request it, you can safely ignore this email.</p>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px;">&mdash; <%= appName %>
+        </p>
+      </td>
+    </tr>
+  </table>
+</body>
+
+</html>

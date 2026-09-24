@@ -23,7 +23,7 @@ import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator.js';
 import { UserResponseDto } from '../users/dto/user-response.dto.js';
 import { User } from '../users/entities/user.entity.js';
-import { REFRESH_TOKEN_COOKIE } from './auth.constants.js';
+import { REFRESH_TOKEN_COOKIE } from './constants/auth.constants.js';
 import { AuthService } from './auth.service.js';
 import { AccessTokenDto, LoginResponseDto } from './dto/auth-response.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
@@ -32,6 +32,10 @@ import {
   clearRefreshTokenCookie,
   setRefreshTokenCookie,
 } from './utils/refresh-cookie.util.js';
+import { EmailDto } from './dto/email.dto.js';
+import { MessageResponseDto } from './dto/message-response.dto.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import { VerifyEmailDto } from './dto/verify-email.dto.js';
 
 @ApiTags('Auth')
 @Public()
@@ -104,5 +108,55 @@ export class AuthController {
     if (token) await this.auth.logout(token);
     clearRefreshTokenCookie(res, this.config);
     return null;
+  }
+
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify the email address with the 6-digit code' })
+  @ApiOkResponse({ type: MessageResponseDto })
+  @ApiBadRequestResponse({
+    description:
+      'Invalid or expired code (5 wrong attempts invalidate the code)',
+  })
+  verifyEmail(@Body() dto: VerifyEmailDto): Promise<MessageResponseDto> {
+    return this.auth.verifyEmail(dto);
+  }
+
+  @Post('resend-verification-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Send a new verification code',
+    description:
+      'Always returns the same response. A code is only sent for an existing, unverified account, and at most once every 60 seconds.',
+  })
+  @ApiOkResponse({ type: MessageResponseDto })
+  resendVerificationOtp(@Body() dto: EmailDto): Promise<MessageResponseDto> {
+    return this.auth.resendVerificationOtp(dto);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Email a password reset code',
+    description:
+      'Always returns the same response, whether or not the email exists.',
+  })
+  @ApiOkResponse({ type: MessageResponseDto })
+  forgotPassword(@Body() dto: EmailDto): Promise<MessageResponseDto> {
+    return this.auth.forgotPassword(dto);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Set a new password with the reset code',
+    description: 'Revokes all refresh tokens of the user.',
+  })
+  @ApiOkResponse({ type: MessageResponseDto })
+  @ApiBadRequestResponse({
+    description: 'Invalid or expired code, or validation failed',
+  })
+  resetPassword(@Body() dto: ResetPasswordDto): Promise<MessageResponseDto> {
+    return this.auth.resetPassword(dto);
   }
 }

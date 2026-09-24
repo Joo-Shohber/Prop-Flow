@@ -72,10 +72,10 @@ export class UsersService {
    */
   findCredentialsByEmail(
     email: string,
-  ): Promise<Pick<User, 'id' | 'passwordHash' | 'isActive'> | null> {
+  ): Promise<Pick<User, 'id' | 'passwordHash' | 'isActive' | 'isEmailVerified'> | null> {
     return this.userRepository
       .createQueryBuilder('user')
-      .select(['user.id', 'user.passwordHash', 'user.isActive'])
+      .select(['user.id', 'user.passwordHash', 'user.isActive', 'user.isEmailVerified'])
       .where('user.email = :email', { email })
       .getOne();
   }
@@ -93,6 +93,15 @@ export class UsersService {
     );
 
     return this.findById(saved.id);
+  }
+
+  /**
+   * Marks a user's email address as verified.
+   * @param id - The ID of the user whose email should be marked as verified.
+   * @returns A promise that resolves when the update is completed.
+   */
+  async makeEmailVerified(id: string): Promise<void> {
+    await this.userRepository.update({ id }, { isEmailVerified: true });
   }
 
   /**

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -11,20 +12,33 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { durationToSeconds } from '../common/utils/duration.util.js';
 import { safeEqual, sha256 } from '../common/utils/hash.util.js';
-import { User } from '../users/entities/user.entity.js';
-import { UsersService } from '../users/users.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
-import { PasswordService } from './password.service.js';
 import { AuthTokens, RefreshTokenPayload } from './types/token.types.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
+import { OtpService } from './otp.service.js';
+import { EmailService } from '../common/mail/email.service.js';
+import { OtpPurpose } from './enums/otp-purpose.enum.js';
+import { VerifyEmailDto } from './dto/verify-email.dto.js';
+import { MessageResponseDto } from './dto/message-response.dto.js';
+import { EmailDto } from './dto/email.dto.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import { UsersService } from '../users/users.service.js';
+import { User } from '../users/entities/user.entity.js';
+import { PasswordService } from './password.service.js';
+
+const INVALID_OTP_MESSAGE = 'Invalid or expired verification code';
+const OTP_SENT_MESSAGE =
+  'If the account exists, a verification code has been sent to the email address';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly users: UsersService,
-    private readonly passwords: PasswordService,
-    private readonly jwt: JwtService,
+    private readonly usersService: UsersService,
+    private readonly passwordService: PasswordService,
+    private readonly otpService: OtpService,
+    private readonly emailService: EmailService,
+    private readonly jwtService: JwtService,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
     @InjectRepository(RefreshToken)
@@ -40,15 +54,37 @@ export class AuthService {
    * @throws ConflictException If the email is already registered.
    */
   async register(dto: RegisterDto): Promise<User> {
-    if (await this.users.findByEmail(dto.email)) {
+    if (await this.usersService.findByEmail(dto.email)) {
       throw new ConflictException('Email is already registered');
     }
 
     const { password, ...profile } = dto;
-    return this.users.create({
+    const user = await this.usersService.create({
       ...profile,
-      passwordHash: await this.passwords.hash(password),
+      passwordHash: await this.passwordService.hash(password),
     });
+
+    await this.sendOtp(user.email, OtpPurpose.EMAIL_VERIFICATION);
+    return user;
+  }
+
+  /**
+   * Verifies a user's email address using the provided OTP.
+   * @param dto - Contains the user's email address and verification OTP.
+   * @returns A success message when the email is successfully verified.
+   * @throws BadRequestException If the OTP is invalid or the user does not exist.
+   */
+  async verifyEmail(dto: VerifyEmailDto): Promise<MessageResponseDto> {
+    const valid = await this.otpService.verify(
+      OtpPurpose.EMAIL_VERIFICATION,
+      dto.email,
+      dto.otp,
+    );
+    const user = valid ? await this.usersService.findByEmail(dto.email) : null;
+    if (!user) throw new BadRequestException(INVALID_OTP_MESSAGE);
+
+    await this.usersService.makeEmailVerified(user.id);
+    return { message: 'Email verified successfully' };
   }
 
   /**
@@ -63,14 +99,20 @@ export class AuthService {
   async login(dto: LoginDto): Promise<AuthTokens & { user: User }> {
     const invalid = new UnauthorizedException('Invalid email or password');
 
-    const credentials = await this.users.findCredentialsByEmail(dto.email);
+    const credentials = await this.usersService.findCredentialsByEmail(
+      dto.email,
+    );
+
     if (!credentials) {
-      await this.passwords.verifyDummy(dto.password);
+      await this.passwordService.verifyDummy(dto.password);
       throw invalid;
     }
 
     if (
-      !(await this.passwords.verify(credentials.passwordHash, dto.password))
+      !(await this.passwordService.verify(
+        credentials.passwordHash,
+        dto.password,
+      ))
     ) {
       throw invalid;
     }
@@ -79,9 +121,15 @@ export class AuthService {
       throw new ForbiddenException('This account has been deactivated');
     }
 
+    if (!credentials.isEmailVerified) {
+      throw new ForbiddenException(
+        'Please verify your email before logging in',
+      );
+    }
+
     const family = randomUUID();
     const tokens = await this.issueTokens(credentials.id, family);
-    const user = await this.users.findById(credentials.id);
+    const user = await this.usersService.findById(credentials.id);
     return { user, ...tokens };
   }
 
@@ -123,7 +171,7 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token expired');
     }
 
-    const user = await this.users.findById(refreshToken.userId);
+    const user = await this.usersService.findById(refreshToken.userId);
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Account is not active');
     }
@@ -150,10 +198,64 @@ export class AuthService {
   }
 
   /**
+   * Resends an email verification OTP to user.
+   * @param dto - Contains the user's email address.
+   * @returns A promise containing a generic OTP sent message.
+   */
+  async resendVerificationOtp(dto: EmailDto): Promise<MessageResponseDto> {
+    const user = await this.usersService.findByEmail(dto.email);
+    if (user && user.isActive && !user.isEmailVerified) {
+      await this.sendOtp(user.email, OtpPurpose.EMAIL_VERIFICATION);
+    }
+    return { message: OTP_SENT_MESSAGE };
+  }
+
+  /**
+   * Sends a password reset OTP to an eligible user.
+   * @param dto - Contains the user's email address.
+   * @returns A promise containing a generic OTP sent message.
+   */
+  async forgotPassword(dto: EmailDto): Promise<MessageResponseDto> {
+    const user = await this.usersService.findByEmail(dto.email);
+    if (user && user.isActive && user.isEmailVerified) {
+      await this.sendOtp(user.email, OtpPurpose.PASSWORD_RESET);
+    }
+    return { message: OTP_SENT_MESSAGE };
+  }
+
+  /**
+   * Resets a user's password after validating the password reset OTP.
+   * @param dto - Contains the user's email, OTP, and new password.
+   * @returns A promise containing a password reset confirmation message.
+   * @throws BadRequestException If the OTP is invalid or the user is inactive.
+   */
+  async resetPassword(dto: ResetPasswordDto): Promise<MessageResponseDto> {
+    const valid = await this.otpService.verify(
+      OtpPurpose.PASSWORD_RESET,
+      dto.email,
+      dto.otp,
+    );
+    const user = valid ? await this.usersService.findByEmail(dto.email) : null;
+    if (!user || !user.isActive)
+      throw new BadRequestException(INVALID_OTP_MESSAGE);
+
+    const passwordHash = await this.passwordService.hash(dto.newPassword);
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(User, { id: user.id }, { passwordHash });
+      await manager.update(
+        RefreshToken,
+        { userId: user.id, revoked: false },
+        { revoked: true },
+      );
+    });
+
+    return {
+      message: 'Password has been reset. Please log in with your new password',
+    };
+  }
+
+  /**
    * Logs out the user by revoking the refresh token family.
-   * Invalid or expired refresh tokens are silently ignored because logout
-   * should remain idempotent and should not fail when the token is already
-   * invalid or expired.
    * @param token The refresh token provided by the client.
    * @returns Resolves when the logout operation is completed.
    */
@@ -166,8 +268,13 @@ export class AuthService {
         { revoked: true },
       );
     } catch {
-      // nothing to revoke
+      // Nothing to do || Silent
     }
+  }
+
+  private async sendOtp(email: string, purpose: OtpPurpose): Promise<void> {
+    const code = await this.otpService.issue(purpose, email);
+    if (code) await this.emailService.sendOtp(email, code, purpose);
   }
 
   private async issueTokens(
@@ -185,7 +292,7 @@ export class AuthService {
     );
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwt.signAsync(
+      this.jwtService.signAsync(
         { userId },
         {
           secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'),
@@ -193,7 +300,7 @@ export class AuthService {
           algorithm: 'HS256',
         },
       ),
-      this.jwt.signAsync(
+      this.jwtService.signAsync(
         { userId, jti, family },
         {
           secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
@@ -222,10 +329,13 @@ export class AuthService {
     token: string,
   ): Promise<RefreshTokenPayload> {
     try {
-      const payload = await this.jwt.verifyAsync<RefreshTokenPayload>(token, {
-        secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
-        algorithms: ['HS256'],
-      });
+      const payload = await this.jwtService.verifyAsync<RefreshTokenPayload>(
+        token,
+        {
+          secret: this.config.getOrThrow<string>('JWT_REFRESH_SECRET'),
+          algorithms: ['HS256'],
+        },
+      );
 
       if (
         typeof payload.userId !== 'string' ||
@@ -246,6 +356,9 @@ export class AuthService {
   }
 
   private async revokeFamily(family: string): Promise<void> {
-    await this.refreshTokens.update({ family }, { revoked: true });
+    await this.refreshTokens.update(
+      { family, revoked: false },
+      { revoked: true },
+    );
   }
 }
