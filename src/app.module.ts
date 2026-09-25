@@ -14,6 +14,7 @@ import { PropertiesModule } from './properties/properties.module.js';
 import { UnitsModule } from './units/units.module.js';
 import { LeaseExpirationModule } from './common/lease-expiration/lease-expiration.module.js';
 import { LeasesModule } from './leases/leases.module.js';
+import { MaintenanceModule } from './maintenance/maintenance.module.js';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { LeasesModule } from './leases/leases.module.js';
     PropertiesModule,
     UnitsModule,
     LeasesModule,
+    MaintenanceModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -11,9 +12,10 @@ import {
 } from '../common/pagination/pagination.utils.js';
 import { ListUsersQueryDto } from './dto/list-users-query.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
-import { User } from './entities/user.entity.js';
+import { User, userAvatar } from './entities/user.entity.js';
 import { UserRole } from './enums/user-role.enum.js';
 import { InjectRepository } from '@nestjs/typeorm';
+import { UploadService } from '../common/uploads/upload.service.js';
 
 const USER_SORT_FIELDS = [
   'createdAt',
@@ -37,6 +39,7 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    private readonly uploads: UploadService,
   ) {}
 
   /**
@@ -66,8 +69,6 @@ export class UsersService {
 
   /**
    * Finds the credentials required for authentication.
-   * The password hash is explicitly selected because it is excluded
-   * from normal queries through the entity's `select: false` setting.
    * @param email - The email address used for authentication.
    * @returns The user's ID, password hash, and active status if found.
    */
@@ -91,8 +92,6 @@ export class UsersService {
 
   /**
    * Creates and persists a new user.
-   * The user is re-read after creation so the password hash,
-   * which is excluded from normal queries, is not returned.
    * @param data - The data required to create the user.
    * @returns The newly created user.
    */
@@ -100,6 +99,42 @@ export class UsersService {
     const saved = await this.userRepo.save(this.userRepo.create(data));
 
     return this.findById(saved.id);
+  }
+
+  /**
+   * Sets a new avatar for the user.
+   * @param user The user whose avatar will be updated.
+   * @param file The new avatar image file.
+   * @returns The updated user.
+   * @throws BadRequestException if no avatar file is provided.
+   */
+  async setAvatar(user: User, file?: Express.Multer.File): Promise<User> {
+    if (!file) throw new BadRequestException('You do not have an avatar');
+
+    const [uploaded] = await this.uploads.uploadImages(
+      [file],
+      'propflow/avatars',
+      1,
+    );
+    if (user.avatar.publicId !== 'null')
+      await this.uploads.deleteImages([user.avatar]);
+    user.avatar = uploaded;
+    return this.userRepo.save(user);
+  }
+
+  /**
+   * Removes the user's current avatar and restores the default avatar.
+   * @param user The user whose avatar will be removed.
+   * @returns The updated user with the default avatar.
+   */
+  async removeAvatar(user: User): Promise<User> {
+    if (user.avatar.publicId === 'null') {
+      throw new BadRequestException('You hava not avatar');
+    }
+    await this.uploads.deleteImages([user.avatar]);
+
+    user.avatar = userAvatar;
+    return this.userRepo.save(user);
   }
 
   /**

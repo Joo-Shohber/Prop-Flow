@@ -198,6 +198,24 @@ export class PropertiesService {
     return this.propertyRepo.save(property);
   }
 
+  async removeImage(
+    actor: User,
+    id: string,
+    publicId: string,
+  ): Promise<Property> {
+    const property = await this.findForActor(actor, id);
+    const image = property.images.find((img) => img.publicId === publicId);
+    if (!image) throw new NotFoundException('Image not found on this property');
+
+    await this.uploadService.deleteImages([image]);
+    property.images = property.images.filter(
+      (img) => img.publicId !== publicId,
+    );
+    const saved = await this.propertyRepo.save(property);
+    // await this.cache.invalidateDashboard();
+    return saved;
+  }
+
   private baseWhere(
     actor: User,
     query: ListPropertiesQueryDto,

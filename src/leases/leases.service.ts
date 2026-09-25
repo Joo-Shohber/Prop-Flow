@@ -34,7 +34,8 @@ const LEASE_SORT_FIELDS = ['createdAt', 'startDate', 'endDate'] as const;
 @Injectable()
 export class LeasesService {
   constructor(
-    @InjectRepository(Lease) private readonly leaseRepo: Repository<Lease>,
+    @InjectRepository(Lease)
+    private readonly leaseRepo: Repository<Lease>,
     private readonly unitsService: UnitsService,
     private readonly usersService: UsersService,
     private readonly leaseExpiration: LeaseExpirationService,
@@ -120,6 +121,17 @@ export class LeasesService {
       .getManyAndCount();
 
     return Paginated.of(data, total, query);
+  }
+
+  /**
+   * Finds the tenant's active lease.
+   * Used by Maintenance: the unit is derived from the tenant's active lease.
+   * @param tenantId The ID of the tenant.
+   * @returns The tenant's active lease, or `null` if no active lease exists.
+   */
+  async findActiveLeaseForTenant(tenantId: string): Promise<Lease | null> {
+    await this.leaseExpiration.run();
+    return this.leaseRepo.findOneBy({ tenantId, status: LeaseStatus.ACTIVE });
   }
 
   /**

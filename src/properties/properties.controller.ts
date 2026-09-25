@@ -42,6 +42,7 @@ import { PropertyResponseDto } from './dto/property-response.dto.js';
 import { UpdatePropertyDto } from './dto/update-property.dto.js';
 import { Property } from './entities/property.entity.js';
 import { PropertiesService } from './properties.service.js';
+import { DeleteImageDto } from '../common/uploads/dto/delete-image.dto.js';
 
 @ApiTags('Properties')
 @ApiBearerAuth()
@@ -147,5 +148,18 @@ export class PropertiesController {
     @UploadedFiles() files: Express.Multer.File[],
   ): Promise<Property> {
     return this.properties.addImages(actor, id, files);
+  }
+
+  @Delete(':id/images')
+  @ApiOperation({ summary: 'Remove a property image' })
+  @ApiOkResponse({ type: PropertyResponseDto })
+  @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })
+  @ApiNotFoundResponse({ description: 'Property or image not found' })
+  removeImage(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DeleteImageDto,
+  ): Promise<Property> {
+    return this.properties.removeImage(actor, id, dto.publicId);
   }
 }

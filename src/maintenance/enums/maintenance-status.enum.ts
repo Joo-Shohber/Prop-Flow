@@ -1,0 +1,8 @@
+export enum MaintenanceStatus {
+  OPEN = 'OPEN',
+  ASSIGNED = 'ASSIGNED',
+  IN_PROGRESS = 'IN_PROGRESS',
+  RESOLVED = 'RESOLVED',
+  CLOSED = 'CLOSED',
+  CANCELLED = 'CANCELLED',
+}

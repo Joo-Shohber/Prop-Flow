@@ -7,6 +7,12 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { UserRole } from '../enums/user-role.enum.js';
+import type { ImageRef } from '../../common/uploads/image-ref.interface.js';
+
+export const userAvatar: ImageRef = {
+  url: 'https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460__480.png',
+  publicId: 'null',
+};
 
 @Entity('users')
 export class User {
@@ -31,6 +37,9 @@ export class User {
 
   @Column({ type: 'enum', enum: UserRole, default: UserRole.TENANT })
   role: UserRole;
+
+  @Column({ type: 'jsonb', default: userAvatar })
+  avatar: ImageRef;
 
   @Column({ type: 'boolean', default: true })
   isActive: boolean;

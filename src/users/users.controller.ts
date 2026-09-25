@@ -1,11 +1,15 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
   Patch,
+  Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -27,6 +31,10 @@ import { UserResponseDto } from './dto/user-response.dto.js';
 import { User } from './entities/user.entity.js';
 import { UserRole } from './enums/user-role.enum.js';
 import { UsersService } from './users.service.js';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBody, ApiConsumes } from '@nestjs/swagger';
+import { memoryStorage } from 'multer';
+import { MAX_IMAGE_SIZE_BYTES } from '../common/uploads/upload.constants.js';
 
 @ApiTags('Users')
 @ApiBearerAuth()
@@ -52,6 +60,36 @@ export class UsersController {
     @Body() dto: UpdateProfileDto,
   ): Promise<User> {
     return this.users.updateProfile(user, dto);
+  }
+
+  @Post('me/avatar')
+  @ApiOperation({ summary: 'Upload or replace my profile picture' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { avatar: { type: 'string', format: 'binary' } },
+    },
+  })
+  @ApiOkResponse({ type: UserResponseDto })
+  @UseInterceptors(
+    FileInterceptor('avatar', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
+    }),
+  )
+  setAvatar(
+    @CurrentUser() user: User,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<User> {
+    return this.users.setAvatar(user, file);
+  }
+
+  @Delete('me/avatar')
+  @ApiOperation({ summary: 'Remove my profile picture' })
+  @ApiOkResponse({ type: UserResponseDto })
+  removeAvatar(@CurrentUser() user: User): Promise<User> {
+    return this.users.removeAvatar(user);
   }
 
   @Get()

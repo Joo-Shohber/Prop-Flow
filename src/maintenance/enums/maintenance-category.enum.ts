@@ -1,0 +1,8 @@
+export enum MaintenanceCategory {
+  PLUMBING = 'PLUMBING',
+  ELECTRICITY = 'ELECTRICITY',
+  HVAC = 'HVAC',
+  CARPENTRY = 'CARPENTRY',
+  APPLIANCES = 'APPLIANCES',
+  OTHER = 'OTHER',
+}
