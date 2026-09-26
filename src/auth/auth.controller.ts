@@ -6,6 +6,8 @@ import {
   Post,
   Req,
   Res,
+  Get,
+  UseGuards,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -36,6 +38,8 @@ import { EmailDto } from './dto/email.dto.js';
 import { MessageResponseDto } from './dto/message-response.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { VerifyEmailDto } from './dto/verify-email.dto.js';
+import { GoogleAuthGuard } from '../common/guards/google-auth.guard.js';
+import { GoogleProfile } from './google.service.js';
 
 @ApiTags('Auth')
 @Public()
@@ -68,6 +72,24 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { refreshToken, ...body } = await this.auth.login(dto);
+    setRefreshTokenCookie(res, refreshToken, this.config);
+    return body;
+  }
+
+  @Get('google')
+  @UseGuards(GoogleAuthGuard)
+  @ApiOperation({ summary: 'Start Google sign-in (redirects to Google)' })
+  googleLogin(): void {}
+
+  @Get('google/callback')
+  @UseGuards(GoogleAuthGuard)
+  @ApiOperation({ summary: 'Google OAuth callback' })
+  @ApiOkResponse({ type: LoginResponseDto })
+  async googleCallback(
+    @Req() req: Request & { user: GoogleProfile },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { refreshToken, ...body } = await this.auth.loginWithGoogle(req.user);
     setRefreshTokenCookie(res, refreshToken, this.config);
     return body;
   }

@@ -32,6 +32,10 @@ import { TransitionNotesDto } from './dto/transition-notes.dto.js';
 import { MaintenanceRequest } from './entities/maintenance-request.entity.js';
 import { MaintenanceStatusHistory } from './entities/maintenance-status-history.entity.js';
 import { MaintenanceStatus } from './enums/maintenance-status.enum.js';
+import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
+import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
+import { NotificationType } from '../notifications/enums/notification-type.enum.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 const MAINTENANCE_SORT_FIELDS = ['createdAt', 'priority', 'status'] as const;
 
@@ -45,6 +49,8 @@ export class MaintenanceService {
     private readonly leasesService: LeasesService,
     private readonly usersService: UsersService,
     private readonly uploadService: UploadService,
+    private readonly notificationsService: NotificationsService,
+    private readonly auditLogsService: AuditLogsService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -167,15 +173,29 @@ export class MaintenanceService {
         )
       : [];
 
-    const request = this.maintenanceRepo.create({
-      ...dto,
-      unitId: lease.unitId,
-      tenantId: actor.id,
-      status: MaintenanceStatus.OPEN,
-      images,
-    });
+    return this.dataSource.transaction(async (manager) => {
+      const unit = await this.loadUnit(manager, lease.unitId);
 
-    return this.maintenanceRepo.save(request);
+      const maintenance = manager.create(MaintenanceRequest, {
+        ...dto,
+        unitId: unit.id,
+        tenantId: actor.id,
+        status: MaintenanceStatus.OPEN,
+        images,
+      });
+      const saved = await manager.save(maintenance);
+
+      await this.notificationsService.create(manager, {
+        recipientId: unit.property.ownerId,
+        type: NotificationType.MAINTENANCE_CREATED,
+        title: 'New maintenance request',
+        message: `A new ${dto.priority.toLowerCase()} priority request was submitted for unit ${unit.unitNumber}.`,
+        relatedEntityType: 'MaintenanceRequest',
+        relatedEntityId: saved.id,
+      });
+
+      return saved;
+    });
   }
 
   /**
@@ -194,6 +214,7 @@ export class MaintenanceService {
     actor: User,
     id: string,
     dto: AssignMaintenanceDto,
+    ip?: string,
   ): Promise<MaintenanceRequest> {
     const staff = await this.usersService.findById(dto.assignedStaffId);
 
@@ -208,37 +229,59 @@ export class MaintenanceService {
     }
 
     return this.dataSource.transaction(async (manager) => {
-      const maintenance = await this.lock(manager, id);
-      const unit = await this.loadUnit(manager, maintenance.unitId);
-
+      const request = await this.lock(manager, id);
+      const unit = await this.loadUnit(manager, request.unitId);
       if (!canManageProperty(actor, unit.property)) {
         throw new ForbiddenException(
           'You do not have access to this maintenance request',
         );
       }
-
-      if (maintenance.status !== MaintenanceStatus.OPEN) {
+      if (request.status !== MaintenanceStatus.OPEN) {
         throw new ConflictException('Only an OPEN request can be assigned');
       }
 
-      const previousStatus = maintenance.status;
-
-      maintenance.status = MaintenanceStatus.ASSIGNED;
-      maintenance.assignedStaffId = staff.id;
-      maintenance.scheduledDate = dto.scheduledDate ?? null;
-
-      await manager.save(maintenance);
-
-      await this.logTransition(
+      const previousStatus = request.status;
+      request.status = MaintenanceStatus.ASSIGNED;
+      request.assignedStaffId = staff.id;
+      request.scheduledDate = dto.scheduledDate ?? null;
+      await manager.save(request);
+      await this.createMaintenanceHistory(
         manager,
-        maintenance.id,
+        request.id,
         previousStatus,
-        maintenance.status,
+        request.status,
         actor.id,
         dto.notes,
       );
 
-      return maintenance;
+      await this.notificationsService.create(manager, {
+        recipientId: staff.id,
+        type: NotificationType.MAINTENANCE_ASSIGNED,
+        title: 'Maintenance request assigned to you',
+        message: `You have been assigned to "${request.title}".`,
+        relatedEntityType: 'MaintenanceRequest',
+        relatedEntityId: request.id,
+      });
+
+      await this.notificationsService.create(manager, {
+        recipientId: request.tenantId,
+        type: NotificationType.MAINTENANCE_ASSIGNED,
+        title: 'Your maintenance request was assigned',
+        message: `"${request.title}" has been assigned to a technician.`,
+        relatedEntityType: 'MaintenanceRequest',
+        relatedEntityId: request.id,
+      });
+
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.MAINTENANCE_ASSIGNED,
+        entity: 'MaintenanceRequest',
+        entityId: request.id,
+        metadata: { assignedStaffId: staff.id },
+        ipAddress: ip,
+      });
+
+      return request;
     });
   }
 
@@ -276,7 +319,7 @@ export class MaintenanceService {
 
       await manager.save(maintenance);
 
-      await this.logTransition(
+      await this.createMaintenanceHistory(
         manager,
         maintenance.id,
         previousStatus,
@@ -306,6 +349,7 @@ export class MaintenanceService {
     id: string,
     dto: CompleteMaintenanceDto,
     files: Express.Multer.File[],
+    ip?: string,
   ): Promise<MaintenanceRequest> {
     const completionImages = files.length
       ? await this.uploadService.uploadImages(
@@ -316,39 +360,61 @@ export class MaintenanceService {
       : [];
 
     return this.dataSource.transaction(async (manager) => {
-      const maintenance = await this.lock(manager, id);
-
-      if (maintenance.assignedStaffId !== actor.id) {
+      const request = await this.lock(manager, id);
+      if (request.assignedStaffId !== actor.id) {
         throw new ForbiddenException(
           'Only the assigned staff member can complete this request',
         );
       }
-
-      if (maintenance.status !== MaintenanceStatus.IN_PROGRESS) {
+      if (request.status !== MaintenanceStatus.IN_PROGRESS) {
         throw new ConflictException(
           'Only an IN_PROGRESS request can be completed',
         );
       }
 
-      const previousStatus = maintenance.status;
-
-      maintenance.status = MaintenanceStatus.RESOLVED;
-      maintenance.resolutionDescription = dto.resolutionDescription;
-      maintenance.completionImages = completionImages;
-      maintenance.resolvedAt = new Date();
-
-      await manager.save(maintenance);
-
-      await this.logTransition(
+      const previousStatus = request.status;
+      request.status = MaintenanceStatus.RESOLVED;
+      request.resolutionDescription = dto.resolutionDescription;
+      request.completionImages = completionImages;
+      request.resolvedAt = new Date();
+      await manager.save(request);
+      await this.createMaintenanceHistory(
         manager,
-        maintenance.id,
+        request.id,
         previousStatus,
-        maintenance.status,
+        request.status,
         actor.id,
         dto.notes,
       );
 
-      return maintenance;
+      const unit = await this.loadUnit(manager, request.unitId);
+      await this.notificationsService.create(manager, {
+        recipientId: request.tenantId,
+        type: NotificationType.MAINTENANCE_RESOLVED,
+        title: 'Your maintenance request was resolved',
+        message: `"${request.title}" has been marked as resolved.`,
+        relatedEntityType: 'MaintenanceRequest',
+        relatedEntityId: request.id,
+      });
+
+      await this.notificationsService.create(manager, {
+        recipientId: unit.property.ownerId,
+        type: NotificationType.MAINTENANCE_RESOLVED,
+        title: 'A maintenance request was resolved',
+        message: `"${request.title}" on unit ${unit.unitNumber} has been resolved.`,
+        relatedEntityType: 'MaintenanceRequest',
+        relatedEntityId: request.id,
+      });
+
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.MAINTENANCE_COMPLETED,
+        entity: 'MaintenanceRequest',
+        entityId: request.id,
+        ipAddress: ip,
+      });
+
+      return request;
     });
   }
 
@@ -392,7 +458,7 @@ export class MaintenanceService {
 
       await manager.save(maintenance);
 
-      await this.logTransition(
+      await this.createMaintenanceHistory(
         manager,
         maintenance.id,
         previousStatus,
@@ -451,7 +517,7 @@ export class MaintenanceService {
 
       await manager.save(maintenance);
 
-      await this.logTransition(
+      await this.createMaintenanceHistory(
         manager,
         maintenance.id,
         previousStatus,
@@ -615,7 +681,7 @@ export class MaintenanceService {
     return unit;
   }
 
-  private async logTransition(
+  private async createMaintenanceHistory(
     manager: EntityManager,
     requestId: string,
     previousStatus: MaintenanceStatus,

@@ -15,6 +15,8 @@ import { UnitsModule } from './units/units.module.js';
 import { LeaseExpirationModule } from './common/lease-expiration/lease-expiration.module.js';
 import { LeasesModule } from './leases/leases.module.js';
 import { MaintenanceModule } from './maintenance/maintenance.module.js';
+import { AuditLogsModule } from './audit-logs/audit-logs.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
 
 @Module({
   imports: [
@@ -27,6 +29,8 @@ import { MaintenanceModule } from './maintenance/maintenance.module.js';
     UnitsModule,
     LeasesModule,
     MaintenanceModule,
+    NotificationsModule,
+    AuditLogsModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,

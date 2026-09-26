@@ -43,6 +43,8 @@ import { UpdatePropertyDto } from './dto/update-property.dto.js';
 import { Property } from './entities/property.entity.js';
 import { PropertiesService } from './properties.service.js';
 import { DeleteImageDto } from '../common/uploads/dto/delete-image.dto.js';
+import { Req } from '@nestjs/common';
+import type { Request } from 'express';
 
 @ApiTags('Properties')
 @ApiBearerAuth()
@@ -73,8 +75,9 @@ export class PropertiesController {
   create(
     @CurrentUser() actor: User,
     @Body() dto: CreatePropertyDto,
+    @Req() req: Request,
   ): Promise<Property> {
-    return this.properties.create(actor, dto);
+    return this.properties.create(actor, dto, req.ip);
   }
 
   @Get(':id')
@@ -113,8 +116,9 @@ export class PropertiesController {
   async remove(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request,
   ): Promise<null> {
-    await this.properties.remove(actor, id);
+    await this.properties.remove(actor, id, req.ip);
     return null;
   }
 

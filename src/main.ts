@@ -14,7 +14,7 @@ async function bootstrap() {
   const domain = config.getOrThrow<string>('DOMAIN');
 
   await app.listen(port);
-  Logger.log(`PropFlow running on ${domain}:${port}/api/v1`, 'Bootstrap');
-  Logger.log(`Swagger docs on ${domain}:${port}/api/docs`, 'Bootstrap');
+  Logger.log(`PropFlow running on ${domain}/api/v1`, 'Bootstrap');
+  Logger.log(`Swagger docs on ${domain}/api/docs`, 'Bootstrap');
 }
 void bootstrap();

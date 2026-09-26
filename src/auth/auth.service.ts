@@ -26,6 +26,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { UsersService } from '../users/users.service.js';
 import { User } from '../users/entities/user.entity.js';
 import { PasswordService } from './password.service.js';
+import { GoogleProfile } from './google.service.js';
 
 const INVALID_OTP_MESSAGE = 'Invalid or expired verification code';
 const OTP_SENT_MESSAGE =
@@ -110,7 +111,7 @@ export class AuthService {
 
     if (
       !(await this.passwordService.verify(
-        credentials.passwordHash,
+        credentials.passwordHash!,
         dto.password,
       ))
     ) {
@@ -130,6 +131,35 @@ export class AuthService {
     const family = randomUUID();
     const tokens = await this.issueTokens(credentials.id, family);
     const user = await this.usersService.findById(credentials.id);
+    return { user, ...tokens };
+  }
+
+  async loginWithGoogle(
+    profile: GoogleProfile,
+  ): Promise<AuthTokens & { user: User }> {
+    let user = await this.usersService.findByGoogleId(profile.googleId);
+
+    if (!user) {
+      const existing = await this.usersService.findByEmail(profile.email);
+      if (existing) {
+        if (!existing.isActive) {
+          throw new ForbiddenException('This account has been deactivated');
+        }
+        user = await this.usersService.linkGoogleAccount(
+          existing,
+          profile.googleId,
+        );
+      } else {
+        user = await this.usersService.createFromGoogle(profile);
+      }
+    }
+
+    if (!user.isActive) {
+      throw new ForbiddenException('This account has been deactivated');
+    }
+
+    const family = randomUUID();
+    const tokens = await this.issueTokens(user.id, family);
     return { user, ...tokens };
   }
 

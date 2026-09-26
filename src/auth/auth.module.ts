@@ -11,11 +11,14 @@ import { RefreshToken } from './entities/refresh-token.entity.js';
 import { PasswordService } from './password.service.js';
 import { MailModule } from '../common/mail/mail.module.js';
 import { OtpService } from './otp.service.js';
+import { PassportModule } from '@nestjs/passport';
+import { GoogleStrategy } from './google.service.js';
 
 @Module({
   imports: [
     UsersModule,
     MailModule,
+    PassportModule.register({ defaultStrategy: 'google' }),
     TypeOrmModule.forFeature([RefreshToken]),
     JwtModule.register({}),
   ],
@@ -24,7 +27,7 @@ import { OtpService } from './otp.service.js';
     AuthService,
     PasswordService,
     OtpService,
-    // Global guards, in order: authenticate first, then check roles.
+    GoogleStrategy,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],

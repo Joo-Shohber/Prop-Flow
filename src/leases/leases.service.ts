@@ -28,6 +28,10 @@ import { ListLeasesQueryDto } from './dto/list-leases-query.dto.js';
 import { UpdateLeaseDto } from './dto/update-lease.dto.js';
 import { Lease } from './entities/lease.entity.js';
 import { LeaseStatus } from './enums/lease-status.enum.js';
+import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
+import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
+import { NotificationType } from '../notifications/enums/notification-type.enum.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 
 const LEASE_SORT_FIELDS = ['createdAt', 'startDate', 'endDate'] as const;
 
@@ -39,6 +43,8 @@ export class LeasesService {
     private readonly unitsService: UnitsService,
     private readonly usersService: UsersService,
     private readonly leaseExpiration: LeaseExpirationService,
+    private readonly notifications: NotificationsService,
+    private readonly auditLogs: AuditLogsService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -112,7 +118,9 @@ export class LeasesService {
     if (query.unitId)
       queryBuilder.andWhere('lease.unitId = :unitId', { unitId: query.unitId });
     if (query.tenantId)
-      queryBuilder.andWhere('lease.tenantId = :tenantId', { tenantId: query.tenantId });
+      queryBuilder.andWhere('lease.tenantId = :tenantId', {
+        tenantId: query.tenantId,
+      });
 
     const [data, total] = await queryBuilder
       .orderBy(`lease.${sortBy}`, sortOrder)
@@ -146,7 +154,7 @@ export class LeasesService {
    * @throws ForbiddenException If the actor cannot access the unit.
    * @throws ConflictException If the lease conflicts with an existing lease.
    */
-  async create(actor: User, dto: CreateLeaseDto): Promise<Lease> {
+  async create(actor: User, dto: CreateLeaseDto, ip?: string): Promise<Lease> {
     await this.leaseExpiration.run();
 
     if (dto.startDate >= dto.endDate) {
@@ -162,15 +170,36 @@ export class LeasesService {
       );
     }
 
-    const lease = this.leaseRepo.create({
-      tenantId: tenant.id,
-      unitId: unit.id,
-      startDate: dto.startDate,
-      endDate: dto.endDate,
-      notes: dto.notes ?? null,
-      status: LeaseStatus.PENDING,
+    return this.dataSource.transaction(async (manager) => {
+      const lease = manager.create(Lease, {
+        tenantId: tenant.id,
+        unitId: unit.id,
+        startDate: dto.startDate,
+        endDate: dto.endDate,
+        notes: dto.notes ?? null,
+        status: LeaseStatus.PENDING,
+      });
+      const saved = await manager.save(lease);
+
+      await this.notifications.create(manager, {
+        recipientId: tenant.id,
+        type: NotificationType.LEASE_CREATED,
+        title: 'New lease created',
+        message: `A lease for unit ${unit.unitNumber} has been created for you.`,
+        relatedEntityType: 'Lease',
+        relatedEntityId: saved.id,
+      });
+
+      await this.auditLogs.record(manager, {
+        userId: actor.id,
+        action: AuditAction.LEASE_CREATED,
+        entity: 'Lease',
+        entityId: saved.id,
+        ipAddress: ip,
+      });
+
+      return saved;
     });
-    return this.leaseRepo.save(lease);
   }
 
   /**
@@ -216,7 +245,7 @@ export class LeasesService {
    * @throws ConflictException If the lease is not PENDING or the unit
    * is not AVAILABLE.
    */
-  async activate(actor: User, id: string): Promise<Lease> {
+  async activate(actor: User, id: string, ip?: string): Promise<Lease> {
     await this.leaseExpiration.run();
 
     return this.dataSource.transaction(async (manager) => {
@@ -253,6 +282,23 @@ export class LeasesService {
       await manager.save(lease);
       await manager.save(lockedUnit);
 
+      await this.notifications.create(manager, {
+        recipientId: lease.tenantId,
+        type: NotificationType.LEASE_ACTIVATED,
+        title: 'Lease activated',
+        message: `Your lease for unit ${lockedUnit.unitNumber} is now active.`,
+        relatedEntityType: 'Lease',
+        relatedEntityId: lease.id,
+      });
+
+      await this.auditLogs.record(manager, {
+        userId: actor.id,
+        action: AuditAction.LEASE_ACTIVATED,
+        entity: 'Lease',
+        entityId: lease.id,
+        ipAddress: ip,
+      });
+
       return lease;
     });
   }
@@ -268,7 +314,7 @@ export class LeasesService {
    * @throws ForbiddenException If the actor cannot manage the property.
    * @throws ConflictException If the lease is not PENDING or ACTIVE.
    */
-  async terminate(actor: User, id: string): Promise<Lease> {
+  async terminate(actor: User, id: string, ip?: string): Promise<Lease> {
     await this.leaseExpiration.run();
 
     return this.dataSource.transaction(async (manager) => {
@@ -302,6 +348,23 @@ export class LeasesService {
       if (wasActive) {
         await manager.update(Unit, unit.id, { status: UnitStatus.AVAILABLE });
       }
+
+      await this.notifications.create(manager, {
+        recipientId: lease.tenantId,
+        type: NotificationType.LEASE_TERMINATED,
+        title: 'Lease terminated',
+        message: `Your lease for unit ${unit.unitNumber} has been terminated.`,
+        relatedEntityType: 'Lease',
+        relatedEntityId: lease.id,
+      });
+
+      await this.auditLogs.record(manager, {
+        userId: actor.id,
+        action: AuditAction.LEASE_TERMINATED,
+        entity: 'Lease',
+        entityId: lease.id,
+        ipAddress: ip,
+      });
 
       return lease;
     });

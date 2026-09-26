@@ -21,6 +21,9 @@ import { UpdateUnitDto } from './dto/update-unit.dto.js';
 import { Unit } from './entities/unit.entity.js';
 import { UnitStatus } from './enums/unit-status.enum.js';
 import { LeaseExpirationService } from '../common/lease-expiration/lease-expiration.service.js';
+import { DataSource } from 'typeorm';
+import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
+import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 
 const UNIT_SORT_FIELDS = [
   'createdAt',
@@ -37,9 +40,12 @@ const MANUAL_TRANSITIONS: Partial<Record<UnitStatus, UnitStatus>> = {
 @Injectable()
 export class UnitsService {
   constructor(
-    @InjectRepository(Unit) private readonly unitRepo: Repository<Unit>,
+    @InjectRepository(Unit)
+    private readonly unitRepo: Repository<Unit>,
     private readonly propertiesService: PropertiesService,
     private readonly expiration: LeaseExpirationService,
+    private readonly auditLogsService: AuditLogsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -190,13 +196,19 @@ export class UnitsService {
    * @param actor - The user requesting the status change.
    * @param id - The unique ID of the unit.
    * @param status - The target unit status.
+   * @param ip - The user ip who performing the action.
    * @returns The unit with its updated status.
    * @throws NotFoundException If the unit does not exist.
    * @throws ForbiddenException If the actor cannot manage the unit.
    * @throws BadRequestException If the current status is RENTED or the
    * requested transition is not allowed.
    */
-  async setStatus(actor: User, id: string, status: UnitStatus): Promise<Unit> {
+  async setStatus(
+    actor: User,
+    id: string,
+    status: UnitStatus,
+    ip?: string,
+  ): Promise<Unit> {
     const unit = await this.findForActor(actor, id);
 
     if (unit.status === UnitStatus.RENTED) {
@@ -210,7 +222,20 @@ export class UnitsService {
       );
     }
 
+    const previousStatus = unit.status;
     unit.status = status;
-    return this.unitRepo.save(unit);
+
+    return this.dataSource.transaction(async (manager) => {
+      const saved = await manager.save(unit);
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.UNIT_STATUS_CHANGED,
+        entity: 'Unit',
+        entityId: unit.id,
+        metadata: { previousStatus, newStatus: status },
+        ipAddress: ip,
+      });
+      return saved;
+    });
   }
 }

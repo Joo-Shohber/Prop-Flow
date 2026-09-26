@@ -32,6 +32,8 @@ import { ListLeasesQueryDto } from './dto/list-leases-query.dto.js';
 import { UpdateLeaseDto } from './dto/update-lease.dto.js';
 import { Lease } from './entities/lease.entity.js';
 import { LeasesService } from './leases.service.js';
+import { Req } from '@nestjs/common';
+import type { Request } from 'express';
 
 const READ_ROLES = [UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN] as const;
 const MANAGE_ROLES = [UserRole.OWNER, UserRole.ADMIN] as const;
@@ -73,8 +75,9 @@ export class LeasesController {
   create(
     @CurrentUser() actor: User,
     @Body() dto: CreateLeaseDto,
+    @Req() req: Request,
   ): Promise<Lease> {
-    return this.leases.create(actor, dto);
+    return this.leases.create(actor, dto, req.ip);
   }
 
   @Get(':id')
@@ -122,8 +125,9 @@ export class LeasesController {
   activate(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request,
   ): Promise<Lease> {
-    return this.leases.activate(actor, id);
+    return this.leases.activate(actor, id, req.ip);
   }
 
   @Post(':id/terminate')
@@ -137,7 +141,8 @@ export class LeasesController {
   terminate(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request,
   ): Promise<Lease> {
-    return this.leases.terminate(actor, id);
+    return this.leases.terminate(actor, id, req.ip);
   }
 }

@@ -24,6 +24,9 @@ import { CreatePropertyDto } from './dto/create-property.dto.js';
 import { ListPropertiesQueryDto } from './dto/list-properties-query.dto.js';
 import { UpdatePropertyDto } from './dto/update-property.dto.js';
 import { Property } from './entities/property.entity.js';
+import { DataSource } from 'typeorm';
+import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
+import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 
 const PROPERTY_SORT_FIELDS = ['createdAt', 'name', 'city'] as const;
 
@@ -36,6 +39,8 @@ export class PropertiesService {
     private readonly unitsRepo: Repository<Unit>,
     private readonly usersService: UsersService,
     private readonly uploadService: UploadService,
+    private readonly auditLogsService: AuditLogsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -105,10 +110,15 @@ export class PropertiesService {
    * Creates a new property.
    * @param actor The authenticated user creating the property.
    * @param dto Property creation data.
+   * @param ip - The user ip who performing the action.
    * @returns The created property.
    * @throws BadRequestException If an admin provides an invalid ownerId.
    */
-  async create(actor: User, dto: CreatePropertyDto): Promise<Property> {
+  async create(
+    actor: User,
+    dto: CreatePropertyDto,
+    ip?: string,
+  ): Promise<Property> {
     const { ownerId, ...rest } = dto;
     let resolvedOwnerId = actor.id;
 
@@ -122,9 +132,24 @@ export class PropertiesService {
       resolvedOwnerId = ownerId;
     }
 
-    return this.propertyRepo.save(
-      this.propertyRepo.create({ ...rest, ownerId: resolvedOwnerId }),
-    );
+    return this.dataSource.transaction(async (manager) => {
+      const property = manager.create(Property, {
+        ...rest,
+        ownerId: resolvedOwnerId,
+      });
+
+      await manager.save(Property, property);
+
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.PROPERTY_CREATED,
+        entity: 'Property',
+        entityId: property.id,
+        ipAddress: ip,
+      });
+
+      return property;
+    });
   }
 
   /**
@@ -151,11 +176,12 @@ export class PropertiesService {
    * Soft-deletes a property if none of its units are currently rented.
    * @param actor The authenticated user performing the deletion.
    * @param id Property ID.
+   * @param ip - The user ip who performing the action.
    * @throws NotFoundException If the property does not exist.
    * @throws ForbiddenException If the actor does not have access to it.
    * @throws ConflictException If the property has one or more rented units.
    */
-  async remove(actor: User, id: string): Promise<void> {
+  async remove(actor: User, id: string, ip?: string): Promise<void> {
     const property = await this.findForActor(actor, id);
     const rentedCount = await this.unitsRepo.count({
       where: { propertyId: property.id, status: UnitStatus.RENTED },
@@ -163,7 +189,17 @@ export class PropertiesService {
     if (rentedCount > 0) {
       throw new ConflictException('Cannot delete a property with rented units');
     }
-    await this.propertyRepo.softDelete(property.id);
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.softDelete(Property, property.id);
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.PROPERTY_DELETED,
+        entity: 'Property',
+        entityId: property.id,
+        ipAddress: ip,
+      });
+    });
   }
 
   /**

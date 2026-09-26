@@ -33,6 +33,8 @@ import { UpdateUnitDto } from './dto/update-unit.dto.js';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto.js';
 import { Unit } from './entities/unit.entity.js';
 import { UnitsService } from './units.service.js';
+import { Req } from '@nestjs/common';
+import type { Request } from 'express';
 
 @ApiTags('Units')
 @ApiBearerAuth()
@@ -119,7 +121,8 @@ export class UnitsController {
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUnitStatusDto,
+    @Req() req: Request,
   ): Promise<Unit> {
-    return this.unitsService.setStatus(actor, id, dto.status);
+    return this.unitsService.setStatus(actor, id, dto.status, req.ip);
   }
 }

@@ -16,6 +16,9 @@ import { User, userAvatar } from './entities/user.entity.js';
 import { UserRole } from './enums/user-role.enum.js';
 import { InjectRepository } from '@nestjs/typeorm';
 import { UploadService } from '../common/uploads/upload.service.js';
+import { DataSource } from 'typeorm';
+import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
+import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 
 const USER_SORT_FIELDS = [
   'createdAt',
@@ -39,7 +42,9 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
-    private readonly uploads: UploadService,
+    private readonly uploadService: UploadService,
+    private readonly auditLogsService: AuditLogsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -111,13 +116,13 @@ export class UsersService {
   async setAvatar(user: User, file?: Express.Multer.File): Promise<User> {
     if (!file) throw new BadRequestException('You do not have an avatar');
 
-    const [uploaded] = await this.uploads.uploadImages(
+    const [uploaded] = await this.uploadService.uploadImages(
       [file],
       'propflow/avatars',
       1,
     );
     if (user.avatar.publicId !== 'null')
-      await this.uploads.deleteImages([user.avatar]);
+      await this.uploadService.deleteImages([user.avatar]);
     user.avatar = uploaded;
     return this.userRepo.save(user);
   }
@@ -131,7 +136,7 @@ export class UsersService {
     if (user.avatar.publicId === 'null') {
       throw new BadRequestException('You hava not avatar');
     }
-    await this.uploads.deleteImages([user.avatar]);
+    await this.uploadService.deleteImages([user.avatar]);
 
     user.avatar = userAvatar;
     return this.userRepo.save(user);
@@ -196,12 +201,18 @@ export class UsersService {
    * @param id - The ID of the user whose status should be changed.
    * @param isActive - Whether the account should be active.
    * @param actor - The user performing the action.
+   * @param ip - The user ip who performing the action.
    * @returns The updated user.
    * @throws UnprocessableEntityException If the actor tries to deactivate
    * their own account.
    * @throws NotFoundException If the target user does not exist.
    */
-  async setStatus(id: string, isActive: boolean, actor: User): Promise<User> {
+  async setStatus(
+    id: string,
+    isActive: boolean,
+    actor: User,
+    ip?: string,
+  ): Promise<User> {
     if (actor.id === id && !isActive) {
       throw new UnprocessableEntityException(
         'You cannot deactivate your own account',
@@ -211,7 +222,18 @@ export class UsersService {
     const user = await this.findById(id);
     user.isActive = isActive;
 
-    return this.userRepo.save(user);
+    return this.dataSource.transaction(async (manager) => {
+      const saved = await manager.save(user);
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.USER_STATUS_CHANGED,
+        entity: 'User',
+        entityId: user.id,
+        metadata: { isActive },
+        ipAddress: ip,
+      });
+      return saved;
+    });
   }
 
   /**
@@ -220,12 +242,18 @@ export class UsersService {
    * @param id - The ID of the user whose role should be changed.
    * @param role - The new role to assign.
    * @param actor - The user performing the action.
+   * @param ip - The user ip who performing the action.
    * @returns The updated user.
    * @throws UnprocessableEntityException If the actor tries to change
    * their own role.
    * @throws NotFoundException If the target user does not exist.
    */
-  async setRole(id: string, role: UserRole, actor: User): Promise<User> {
+  async setRole(
+    id: string,
+    role: UserRole,
+    actor: User,
+    ip?: string,
+  ): Promise<User> {
     if (actor.id === id) {
       throw new UnprocessableEntityException('You cannot change your own role');
     }
@@ -233,6 +261,61 @@ export class UsersService {
     const user = await this.findById(id);
     user.role = role;
 
+    return this.dataSource.transaction(async (manager) => {
+      const saved = await manager.save(user);
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.ROLE_CHANGED,
+        entity: 'User',
+        entityId: user.id,
+        metadata: { role },
+        ipAddress: ip,
+      });
+      return saved;
+    });
+  }
+
+  /**
+   * Finds a user by their Google account ID.
+   * @param googleId - The unique Google account ID.
+   * @returns The matching user, or null if no user is found.
+   */
+  findByGoogleId(googleId: string): Promise<User | null> {
+    return this.userRepo.findOneBy({ googleId });
+  }
+
+  /**
+   * Links a Google account to an existing user.
+   * @param user - The user to link the Google account to.
+   * @param googleId - The unique Google account ID.
+   * @returns The updated user.
+   */
+  async linkGoogleAccount(user: User, googleId: string): Promise<User> {
+    user.googleId = googleId;
     return this.userRepo.save(user);
+  }
+
+  /**
+   * Creates a new user from Google account information.
+   * The user's email is automatically marked as verified because it
+   * has been verified by Google during the OAuth flow.
+   * @param data - Google account and user profile data.
+   * @returns The newly created user.
+   */
+  async createFromGoogle(data: {
+    email: string;
+    googleId: string;
+    firstName: string;
+    lastName: string;
+  }): Promise<User> {
+    const saved = await this.userRepo.save(
+      this.userRepo.create({
+        ...data,
+        passwordHash: null,
+        role: UserRole.TENANT,
+        isEmailVerified: true,
+      }),
+    );
+    return this.findById(saved.id);
   }
 }

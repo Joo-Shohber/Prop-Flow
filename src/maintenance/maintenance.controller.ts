@@ -11,6 +11,7 @@ import {
   Delete,
   UploadedFiles,
   UseInterceptors,
+  Req,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import {
@@ -49,6 +50,7 @@ import { MaintenanceService } from './maintenance.service.js';
 import { MaintenanceCategory } from './enums/maintenance-category.enum.js';
 import { MaintenancePriority } from './enums/maintenance-priority.enum.js';
 import { DeleteImageDto } from '../common/uploads/dto/delete-image.dto.js';
+import type { Request } from 'express';
 
 const ALL_ROLES = [
   UserRole.TENANT,
@@ -144,8 +146,9 @@ export class MaintenanceController {
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignMaintenanceDto,
+    @Req() req: Request,
   ): Promise<MaintenanceRequest> {
-    return this.maintenance.assign(actor, id, dto);
+    return this.maintenance.assign(actor, id, dto, req.ip);
   }
 
   @Post(':id/start')
@@ -198,8 +201,9 @@ export class MaintenanceController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CompleteMaintenanceDto,
     @UploadedFiles() files: Express.Multer.File[],
+    @Req() req: Request,
   ): Promise<MaintenanceRequest> {
-    return this.maintenance.complete(actor, id, dto, files ?? []);
+    return this.maintenance.complete(actor, id, dto, files ?? [], req.ip);
   }
 
   @Post(':id/close')

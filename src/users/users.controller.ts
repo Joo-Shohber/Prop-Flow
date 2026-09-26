@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import {
   ApiUnauthorizedResponse,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { Roles } from '../common/decorators/roles.decorator.js';
 import { ListUsersQueryDto } from './dto/list-users-query.dto.js';
@@ -118,8 +120,9 @@ export class UsersController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserStatusDto,
     @CurrentUser() actor: User,
+    @Req() req: Request,
   ): Promise<User> {
-    return this.users.setStatus(id, dto.isActive, actor);
+    return this.users.setStatus(id, dto.isActive, actor, req.ip);
   }
 
   @Patch(':id/role')
@@ -135,7 +138,8 @@ export class UsersController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserRoleDto,
     @CurrentUser() actor: User,
+    @Req() req: Request,
   ): Promise<User> {
-    return this.users.setRole(id, dto.role, actor);
+    return this.users.setRole(id, dto.role, actor, req.ip);
   }
 }
