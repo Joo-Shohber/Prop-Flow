@@ -9,7 +9,7 @@ export function configureApp(app: INestApplication): void {
 
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
-  app.use(helmet());
+  app.use(helmet({ contentSecurityPolicy: false }));
   app.use(cookieParser());
 
   app.enableCors({
