@@ -32,6 +32,7 @@ import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
 import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 import { NotificationType } from '../notifications/enums/notification-type.enum.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { CacheInvalidationService } from '../common/cache/cache-invalidation.service.js';
 
 const LEASE_SORT_FIELDS = ['createdAt', 'startDate', 'endDate'] as const;
 
@@ -45,6 +46,7 @@ export class LeasesService {
     private readonly leaseExpiration: LeaseExpirationService,
     private readonly notifications: NotificationsService,
     private readonly auditLogs: AuditLogsService,
+    private readonly cache: CacheInvalidationService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -299,6 +301,7 @@ export class LeasesService {
         ipAddress: ip,
       });
 
+      await this.cache.invalidateUnitsAndDashboard();
       return lease;
     });
   }
@@ -366,6 +369,7 @@ export class LeasesService {
         ipAddress: ip,
       });
 
+      await this.cache.invalidateUnitsAndDashboard();
       return lease;
     });
   }

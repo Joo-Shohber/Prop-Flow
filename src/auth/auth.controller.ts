@@ -40,9 +40,11 @@ import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { VerifyEmailDto } from './dto/verify-email.dto.js';
 import { GoogleAuthGuard } from '../common/guards/google-auth.guard.js';
 import { GoogleProfile } from './google.service.js';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Auth')
 @Public()
+@Throttle({ default: { limit: 5, ttl: 60_000 } })
 @Controller('auth')
 export class AuthController {
   constructor(

@@ -36,6 +36,7 @@ import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
 import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 import { NotificationType } from '../notifications/enums/notification-type.enum.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { CacheInvalidationService } from '../common/cache/cache-invalidation.service.js';
 
 const MAINTENANCE_SORT_FIELDS = ['createdAt', 'priority', 'status'] as const;
 
@@ -51,6 +52,7 @@ export class MaintenanceService {
     private readonly uploadService: UploadService,
     private readonly notificationsService: NotificationsService,
     private readonly auditLogsService: AuditLogsService,
+    private readonly cache: CacheInvalidationService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -281,6 +283,7 @@ export class MaintenanceService {
         ipAddress: ip,
       });
 
+      await this.cache.invalidateDashboard();
       return request;
     });
   }
@@ -301,34 +304,35 @@ export class MaintenanceService {
     dto: TransitionNotesDto,
   ): Promise<MaintenanceRequest> {
     return this.dataSource.transaction(async (manager) => {
-      const maintenance = await this.lock(manager, id);
+      const request = await this.lock(manager, id);
 
-      if (maintenance.assignedStaffId !== actor.id) {
+      if (request.assignedStaffId !== actor.id) {
         throw new ForbiddenException(
           'Only the assigned staff member can start this request',
         );
       }
 
-      if (maintenance.status !== MaintenanceStatus.ASSIGNED) {
+      if (request.status !== MaintenanceStatus.ASSIGNED) {
         throw new ConflictException('Only an ASSIGNED request can be started');
       }
 
-      const previousStatus = maintenance.status;
+      const previousStatus = request.status;
 
-      maintenance.status = MaintenanceStatus.IN_PROGRESS;
+      request.status = MaintenanceStatus.IN_PROGRESS;
 
-      await manager.save(maintenance);
+      await manager.save(request);
 
       await this.createMaintenanceHistory(
         manager,
-        maintenance.id,
+        request.id,
         previousStatus,
-        maintenance.status,
+        request.status,
         actor.id,
         dto.notes,
       );
 
-      return maintenance;
+      await this.cache.invalidateDashboard();
+      return request;
     });
   }
 
@@ -414,6 +418,7 @@ export class MaintenanceService {
         ipAddress: ip,
       });
 
+      await this.cache.invalidateDashboard();
       return request;
     });
   }
@@ -434,12 +439,12 @@ export class MaintenanceService {
     dto: TransitionNotesDto,
   ): Promise<MaintenanceRequest> {
     return this.dataSource.transaction(async (manager) => {
-      const maintenance = await this.lock(manager, id);
-      const unit = await this.loadUnit(manager, maintenance.unitId);
+      const request = await this.lock(manager, id);
+      const unit = await this.loadUnit(manager, request.unitId);
 
       if (
         !canCloseOrCancelMaintenance(actor, {
-          tenantId: maintenance.tenantId,
+          tenantId: request.tenantId,
           unit: { property: unit.property },
         })
       ) {
@@ -448,26 +453,27 @@ export class MaintenanceService {
         );
       }
 
-      if (maintenance.status !== MaintenanceStatus.RESOLVED) {
+      if (request.status !== MaintenanceStatus.RESOLVED) {
         throw new ConflictException('Only a RESOLVED request can be closed');
       }
 
-      const previousStatus = maintenance.status;
+      const previousStatus = request.status;
 
-      maintenance.status = MaintenanceStatus.CLOSED;
+      request.status = MaintenanceStatus.CLOSED;
 
-      await manager.save(maintenance);
+      await manager.save(request);
 
       await this.createMaintenanceHistory(
         manager,
-        maintenance.id,
+        request.id,
         previousStatus,
-        maintenance.status,
+        request.status,
         actor.id,
         dto.notes,
       );
 
-      return maintenance;
+      await this.cache.invalidateDashboard();
+      return request;
     });
   }
 
@@ -488,12 +494,12 @@ export class MaintenanceService {
     dto: TransitionNotesDto,
   ): Promise<MaintenanceRequest> {
     return this.dataSource.transaction(async (manager) => {
-      const maintenance = await this.lock(manager, id);
-      const unit = await this.loadUnit(manager, maintenance.unitId);
+      const request = await this.lock(manager, id);
+      const unit = await this.loadUnit(manager, request.unitId);
 
       if (
         !canCloseOrCancelMaintenance(actor, {
-          tenantId: maintenance.tenantId,
+          tenantId: request.tenantId,
           unit: { property: unit.property },
         })
       ) {
@@ -503,30 +509,31 @@ export class MaintenanceService {
       }
 
       if (
-        maintenance.status !== MaintenanceStatus.OPEN &&
-        maintenance.status !== MaintenanceStatus.ASSIGNED
+        request.status !== MaintenanceStatus.OPEN &&
+        request.status !== MaintenanceStatus.ASSIGNED
       ) {
         throw new ConflictException(
           'Only an OPEN or ASSIGNED request can be cancelled',
         );
       }
 
-      const previousStatus = maintenance.status;
+      const previousStatus = request.status;
 
-      maintenance.status = MaintenanceStatus.CANCELLED;
+      request.status = MaintenanceStatus.CANCELLED;
 
-      await manager.save(maintenance);
+      await manager.save(request);
 
       await this.createMaintenanceHistory(
         manager,
-        maintenance.id,
+        request.id,
         previousStatus,
-        maintenance.status,
+        request.status,
         actor.id,
         dto.notes,
       );
 
-      return maintenance;
+      await this.cache.invalidateDashboard();
+      return request;
     });
   }
 
@@ -696,7 +703,5 @@ export class MaintenanceService {
       changedById,
       notes: notes ?? null,
     });
-
-    // Notification + audit record are added in Phase 7.
   }
 }

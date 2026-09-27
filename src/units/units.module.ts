@@ -5,12 +5,15 @@ import { Unit } from './entities/unit.entity.js';
 import { UnitsController } from './units.controller.js';
 import { UnitsService } from './units.service.js';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module.js';
+import { RedisModule } from '../common/redis/redis.module.js';
+import { CacheInvalidationModule } from '../common/cache/cache-invalidation.module.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Unit]),
     PropertiesModule,
     AuditLogsModule,
+    CacheInvalidationModule,
   ],
   controllers: [UnitsController],
   providers: [UnitsService],

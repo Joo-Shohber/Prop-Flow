@@ -24,6 +24,10 @@ import { LeaseExpirationService } from '../common/lease-expiration/lease-expirat
 import { DataSource } from 'typeorm';
 import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
 import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
+import { createHash } from 'node:crypto';
+import { CacheInvalidationService } from '../common/cache/cache-invalidation.service.js';
+import { UNITS_SEARCH_CACHE_TTL_SECONDS } from '../common/cache/cache.constants.js';
+import { RedisService } from '../common/redis/redis.service.js';
 
 const UNIT_SORT_FIELDS = [
   'createdAt',
@@ -43,8 +47,10 @@ export class UnitsService {
     @InjectRepository(Unit)
     private readonly unitRepo: Repository<Unit>,
     private readonly propertiesService: PropertiesService,
-    private readonly expiration: LeaseExpirationService,
-    private readonly auditLogsService: AuditLogsService,
+    private readonly leaseExpiration: LeaseExpirationService,
+    readonly auditLogsService: AuditLogsService,
+    private readonly redis: RedisService,
+    private readonly cache: CacheInvalidationService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -90,7 +96,11 @@ export class UnitsService {
     actor: User,
     query: ListUnitsQueryDto,
   ): Promise<Paginated<Unit>> {
-    await this.expiration.run();
+    await this.leaseExpiration.run();
+
+    const cacheKey = this.buildSearchCacheKey(actor, query);
+    const cached = await this.redis.getJson<Paginated<Unit>>(cacheKey);
+    if (cached) return cached;
 
     const { sortBy, sortOrder } = resolveSort(
       query,
@@ -134,7 +144,9 @@ export class UnitsService {
       .take(query.limit)
       .getManyAndCount();
 
-    return Paginated.of(data, total, query);
+    const result = Paginated.of(data, total, query);
+    await this.redis.setJson(cacheKey, result, UNITS_SEARCH_CACHE_TTL_SECONDS);
+    return result;
   }
 
   /**
@@ -157,9 +169,12 @@ export class UnitsService {
       actor,
       propertyId,
     );
-    return this.unitRepo.save(
+    const saved = await this.unitRepo.save(
       this.unitRepo.create({ ...dto, propertyId: property.id }),
     );
+    await this.cache.invalidateUnitsAndDashboard();
+
+    return saved;
   }
 
   /**
@@ -174,7 +189,9 @@ export class UnitsService {
   async update(actor: User, id: string, dto: UpdateUnitDto): Promise<Unit> {
     const unit = await this.findForActor(actor, id);
     this.unitRepo.merge(unit, dto);
-    return this.unitRepo.save(unit);
+    const saved = await this.unitRepo.save(unit);
+    await this.cache.invalidateUnitsAndDashboard();
+    return saved;
   }
 
   /**
@@ -188,6 +205,7 @@ export class UnitsService {
   async remove(actor: User, id: string): Promise<void> {
     const unit = await this.findForActor(actor, id);
     await this.unitRepo.remove(unit);
+    await this.cache.invalidateUnitsAndDashboard();
   }
 
   /**
@@ -225,8 +243,8 @@ export class UnitsService {
     const previousStatus = unit.status;
     unit.status = status;
 
-    return this.dataSource.transaction(async (manager) => {
-      const saved = await manager.save(unit);
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const result = await manager.save(unit);
       await this.auditLogsService.record(manager, {
         userId: actor.id,
         action: AuditAction.UNIT_STATUS_CHANGED,
@@ -235,7 +253,30 @@ export class UnitsService {
         metadata: { previousStatus, newStatus: status },
         ipAddress: ip,
       });
-      return saved;
+      return result;
     });
+
+    await this.cache.invalidateUnitsAndDashboard();
+    return saved;
+  }
+
+  private buildSearchCacheKey(actor: User, query: ListUnitsQueryDto): string {
+    const scope = actor.role === UserRole.ADMIN ? 'admin' : actor.id;
+    const canonical = {
+      scope,
+      status: query.status ?? null,
+      propertyId: query.propertyId ?? null,
+      bedrooms: query.bedrooms ?? null,
+      minArea: query.minArea ?? null,
+      maxArea: query.maxArea ?? null,
+      page: query.page,
+      limit: query.limit,
+      sortBy: query.sortBy ?? null,
+      sortOrder: query.sortOrder,
+    };
+    const hash = createHash('sha256')
+      .update(JSON.stringify(canonical))
+      .digest('hex');
+    return `units:search:${hash}`;
   }
 }

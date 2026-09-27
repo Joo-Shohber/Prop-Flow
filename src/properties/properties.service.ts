@@ -6,15 +6,24 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsOrder, FindOptionsWhere, ILike, Repository } from 'typeorm';
+import {
+  DataSource,
+  FindOptionsOrder,
+  FindOptionsWhere,
+  ILike,
+  Repository,
+} from 'typeorm';
 import {
   Paginated,
   resolveSort,
   toSkip,
 } from '../common/pagination/pagination.utils.js';
 import { canManageProperty } from '../common/policies/policy.utils.js';
+import { CacheInvalidationService } from '../common/cache/cache-invalidation.service.js';
 import { PROPERTY_MAX_IMAGES } from '../common/uploads/upload.constants.js';
 import { UploadService } from '../common/uploads/upload.service.js';
+import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
+import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 import { Unit } from '../units/entities/unit.entity.js';
 import { UnitStatus } from '../units/enums/unit-status.enum.js';
 import { User } from '../users/entities/user.entity.js';
@@ -24,9 +33,6 @@ import { CreatePropertyDto } from './dto/create-property.dto.js';
 import { ListPropertiesQueryDto } from './dto/list-properties-query.dto.js';
 import { UpdatePropertyDto } from './dto/update-property.dto.js';
 import { Property } from './entities/property.entity.js';
-import { DataSource } from 'typeorm';
-import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
-import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 
 const PROPERTY_SORT_FIELDS = ['createdAt', 'name', 'city'] as const;
 
@@ -40,6 +46,7 @@ export class PropertiesService {
     private readonly usersService: UsersService,
     private readonly uploadService: UploadService,
     private readonly auditLogsService: AuditLogsService,
+    private readonly cache: CacheInvalidationService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -110,7 +117,7 @@ export class PropertiesService {
    * Creates a new property.
    * @param actor The authenticated user creating the property.
    * @param dto Property creation data.
-   * @param ip - The user ip who performing the action.
+   * @param ip The user ip performing the action.
    * @returns The created property.
    * @throws BadRequestException If an admin provides an invalid ownerId.
    */
@@ -132,24 +139,26 @@ export class PropertiesService {
       resolvedOwnerId = ownerId;
     }
 
-    return this.dataSource.transaction(async (manager) => {
-      const property = manager.create(Property, {
+    const property = await this.dataSource.transaction(async (manager) => {
+      const created = manager.create(Property, {
         ...rest,
         ownerId: resolvedOwnerId,
       });
-
-      await manager.save(Property, property);
+      await manager.save(Property, created);
 
       await this.auditLogsService.record(manager, {
         userId: actor.id,
         action: AuditAction.PROPERTY_CREATED,
         entity: 'Property',
-        entityId: property.id,
+        entityId: created.id,
         ipAddress: ip,
       });
 
-      return property;
+      return created;
     });
+
+    await this.cache.invalidateDashboard();
+    return property;
   }
 
   /**
@@ -161,7 +170,6 @@ export class PropertiesService {
    * @throws NotFoundException If the property does not exist.
    * @throws ForbiddenException If the actor does not have access to it.
    */
-
   async update(
     actor: User,
     id: string,
@@ -169,14 +177,16 @@ export class PropertiesService {
   ): Promise<Property> {
     const property = await this.findForActor(actor, id);
     this.propertyRepo.merge(property, dto);
-    return this.propertyRepo.save(property);
+    const saved = await this.propertyRepo.save(property);
+    await this.cache.invalidateDashboard();
+    return saved;
   }
 
   /**
    * Soft-deletes a property if none of its units are currently rented.
    * @param actor The authenticated user performing the deletion.
    * @param id Property ID.
-   * @param ip - The user ip who performing the action.
+   * @param ip The user ip performing the action.
    * @throws NotFoundException If the property does not exist.
    * @throws ForbiddenException If the actor does not have access to it.
    * @throws ConflictException If the property has one or more rented units.
@@ -200,6 +210,8 @@ export class PropertiesService {
         ipAddress: ip,
       });
     });
+
+    await this.cache.invalidateDashboard();
   }
 
   /**
@@ -231,9 +243,20 @@ export class PropertiesService {
     );
 
     property.images = [...property.images, ...uploadedImages];
-    return this.propertyRepo.save(property);
+    const saved = await this.propertyRepo.save(property);
+    await this.cache.invalidateDashboard();
+    return saved;
   }
 
+  /**
+   * Removes a single image from a property, both from Cloudinary and from the record.
+   * @param actor The authenticated user performing the removal.
+   * @param id Property ID.
+   * @param publicId The Cloudinary publicId of the image to remove.
+   * @returns The updated property.
+   * @throws NotFoundException If the property or the image does not exist.
+   * @throws ForbiddenException If the actor does not have access to it.
+   */
   async removeImage(
     actor: User,
     id: string,
@@ -248,7 +271,7 @@ export class PropertiesService {
       (img) => img.publicId !== publicId,
     );
     const saved = await this.propertyRepo.save(property);
-    // await this.cache.invalidateDashboard();
+    await this.cache.invalidateDashboard();
     return saved;
   }
 
