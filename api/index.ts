@@ -1,3 +1,4 @@
+import 'pg';
 import 'reflect-metadata';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { NestFactory } from '@nestjs/core';
@@ -5,6 +6,8 @@ import { ExpressAdapter } from '@nestjs/platform-express';
 import express from 'express';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+
+console.log('Running on Node', process.version);
 
 const server = express();
 let bootstrapped: Promise<void> | null = null;
