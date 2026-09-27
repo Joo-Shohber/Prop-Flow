@@ -7,6 +7,8 @@ import helmet from 'helmet';
 export function configureApp(app: INestApplication): void {
   const config = app.get(ConfigService);
 
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
   app.use(helmet());
   app.use(cookieParser());
 

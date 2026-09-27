@@ -10,11 +10,13 @@ const envSchema = z.object({
   CORS_ORIGINS: z.string().min(1),
   DOMAIN: z.string().min(1),
 
-  DB_HOST: z.string().min(1).default('localhost'),
-  DB_PORT: z.coerce.number().int().min(1).max(65535).default(5432),
-  DB_USERNAME: z.string().min(1),
-  DB_PASSWORD: z.string(),
-  DB_NAME: z.string().min(1),
+  // DB_HOST: z.string().min(1).default('localhost'),
+  // DB_PORT: z.coerce.number().int().min(1).max(65535).default(5432),
+  // DB_USERNAME: z.string().min(1),
+  // DB_PASSWORD: z.string(),
+  // DB_NAME: z.string().min(1),
+  DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, 'must start with postgres:// or postgresql://'),
+
 
   REDIS_HOST: z.string().min(1),
   REDIS_PORT: z.coerce.number().int().min(1).max(65535).default(6379),

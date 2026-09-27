@@ -45,13 +45,13 @@ import { RateLimitModule } from './common/throttler/rate-limit.module.js';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         type: 'postgres' as const,
-        host: config.get<string>('DB_HOST'),
-        port: config.get<number>('DB_PORT'),
-        username: config.get<string>('DB_USERNAME'),
-        password: config.get<string>('DB_PASSWORD'),
-        database: config.get<string>('DB_NAME'),
+        url: config.getOrThrow<string>('DATABASE_URL'),
+        ssl:
+          config.get<string>('NODE_ENV') === 'production'
+            ? { rejectUnauthorized: false }
+            : false,
         autoLoadEntities: true,
-        synchronize: config.get<string>('NODE_ENV') === 'development',
+        synchronize: false,
       }),
     }),
   ],

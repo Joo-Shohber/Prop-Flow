@@ -34,6 +34,14 @@ const PG_ERRORS: Record<string, { statusCode: number; message: string }> = {
     statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
     message: 'The provided data violates a validation rule',
   },
+  '23502': {
+    statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'A required value is missing',
+  },
+  '22001': {
+    statusCode: HttpStatus.BAD_REQUEST,
+    message: 'A value is too long for its field',
+  },
   '22P02': {
     statusCode: HttpStatus.BAD_REQUEST,
     message: 'Invalid identifier format',
