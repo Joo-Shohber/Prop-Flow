@@ -35,7 +35,7 @@ All authentication logic lives in `src/auth/` (`AuthController`, `AuthService`, 
 
 ## Token rotation and reuse detection
 
-Every call to `POST /auth/refresh` (`AuthService.refresh`) performs, inside one database transaction:
+Every call to `POST /auth/refresh` (`AuthService.refresh`) performs the following. Steps 1-3 are plain reads and checks; only steps 4-5 run inside a database transaction:
 
 1. Verify the JWT signature/expiry and look up the `refresh_tokens` row by `jti`.
 2. Reject if the row is missing, or `userId`/`family` do not match the token's claims.

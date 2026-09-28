@@ -40,7 +40,9 @@ Each mechanism below is documented as: the threat it addresses, and how the impl
 ## Brute force / abuse of sensitive endpoints
 
 **Threat**: credential stuffing against `/auth/login`, OTP guessing against `/auth/verify-email`, or general request flooding.
-**Mitigation**: a class-level `@Throttle({ default: { limit: 5, ttl: 60_000 } })` on `AuthController` limits every auth endpoint to 5 requests/minute per client; a global default of 100 requests/minute/IP applies elsewhere. Enforced by `RedisThrottlerStorage`, a hand-written, Lua-script-based, atomic counter shared across all running instances (not per-process), so the limit cannot be bypassed by hitting a different server instance.
+**Mitigation**: the intended configuration is a class-level `@Throttle({ default: { limit: 5, ttl: 60_000 } })` on `AuthController`, limiting every auth endpoint to 5 requests/minute per client; a global default of 100 requests/minute/IP applies elsewhere. Enforced by `RedisThrottlerStorage`, a hand-written, Lua-script-based, atomic counter shared across all running instances (not per-process), so the limit cannot be bypassed by hitting a different server instance.
+
+> **Verify:** during development the decorator was initially applied to `register` only, and a later change moved it to class level. Confirm that `@Throttle` is present on `AuthController` (or on every sensitive route individually); a route without it falls back to the 100 requests/minute global default, not the stricter auth limit.
 
 ## OTP guessing
 
@@ -60,7 +62,7 @@ Each mechanism below is documented as: the threat it addresses, and how the impl
 ## SQL injection
 
 **Threat**: unsanitized input reaching a raw query.
-**Mitigation**: all data access goes through TypeORM's parameterized query builder / repository API; no string-concatenated SQL is used anywhere in the codebase. The one exception, `LeaseExpirationService.run()`, uses `QueryRunner.query()` with parameterized placeholders (`$1`) for the `ANY($1::uuid[])` clause — no user input is interpolated into that SQL string.
+**Mitigation**: all data access goes through TypeORM's parameterized query builder / repository API; user-supplied values are always passed as bound parameters. Two places build SQL text from code rather than input: the `ORDER BY` column in query-builder searches is interpolated, but only after `resolveSort` restricts it to a hard-coded per-resource whitelist (any other `sortBy` value returns `400`); and the analytics aggregate queries use constant SQL fragments. Separately, `LeaseExpirationService.run()`, `LeaseExpirationService.run()` issues raw SQL through `QueryRunner.query()` with a parameterized placeholder (`$1`) for the `ANY($1::uuid[])` clause; no user input is interpolated into that SQL string.
 
 ## Mass assignment / over-posting
 

@@ -47,6 +47,19 @@ import { MAX_IMAGE_SIZE_BYTES } from '../common/uploads/upload.constants.js';
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
+  @Get()
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'List users (ADMIN)' })
+  @ApiOkResponse({
+    type: UserResponseDto,
+    isArray: true,
+    description: 'Paginated list; see `meta`',
+  })
+  @ApiForbiddenResponse({ description: 'Requires ADMIN role' })
+  findAll(@Query() query: ListUsersQueryDto) {
+    return this.users.findAll(query);
+  }
+
   @Get('me')
   @ApiOperation({ summary: 'Get my profile' })
   @ApiOkResponse({ type: UserResponseDto })
@@ -92,19 +105,6 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   removeAvatar(@CurrentUser() user: User): Promise<User> {
     return this.users.removeAvatar(user);
-  }
-
-  @Get()
-  @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'List users (ADMIN)' })
-  @ApiOkResponse({
-    type: UserResponseDto,
-    isArray: true,
-    description: 'Paginated list; see `meta`',
-  })
-  @ApiForbiddenResponse({ description: 'Requires ADMIN role' })
-  findAll(@Query() query: ListUsersQueryDto) {
-    return this.users.findAll(query);
   }
 
   @Patch(':id/status')

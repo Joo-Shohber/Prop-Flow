@@ -1,5 +1,7 @@
 # Architecture
 
+> **Scope and source of truth.** This documentation set was written from the implementation history of the project (the code, DTOs, and decisions produced and discussed while building it), not from an automated scan of a checked-out repository. Where a detail could not be confirmed as present in the final codebase, the relevant document says so explicitly under a "Verify" note rather than asserting it.
+
 ## Overview
 
 PropFlow is a modular monolith built on NestJS 12, running as native ECMAScript modules (no CommonJS build). It is a single deployable application composed of independent feature modules that communicate through explicit service injection — there is no message bus, no inter-service network calls, and no shared mutable state outside of PostgreSQL and Redis.
@@ -64,7 +66,7 @@ Each feature module follows the same internal layout: `*.controller.ts`, `*.serv
 Dependencies flow one direction; there are no circular module imports:
 
 ```
-AuthModule        -> UsersModule
+AuthModule        -> UsersModule, MailModule, PassportModule, JwtModule
 PropertiesModule  -> UsersModule, AuditLogsModule
 UnitsModule       -> PropertiesModule, AuditLogsModule
 LeasesModule      -> UnitsModule, UsersModule, NotificationsModule, AuditLogsModule
@@ -82,16 +84,17 @@ Client
   -> CORS (CORS_ORIGINS allow-list)
   -> cookie-parser
   -> ValidationPipe (whitelist, forbidNonWhitelisted, transform)
-  -> JwtAuthGuard (global)      -- verifies access token, reloads the User, checks isActive; @Public() skips this
-  -> RolesGuard (global)        -- checks @Roles() metadata against the authenticated user's role
-  -> ThrottlerGuard (global)    -- Redis-backed rate limit check
+  -> global guards (all registered with APP_GUARD):
+       JwtAuthGuard    -- verifies access token, reloads the User, checks isActive; @Public() skips this
+       RolesGuard      -- checks @Roles() metadata against the authenticated user's role
+       ThrottlerGuard  -- Redis-backed rate limit check, tracked by client IP
   -> Controller method
   -> Service method (business logic, transactions, resource-level policy checks)
   -> ResponseInterceptor        -- wraps the return value as { success: true, data, meta? }
   -> (on any thrown exception) AllExceptionsFilter -- normalizes to { success: false, statusCode, error, message, ... }
 ```
 
-Guard order matters: `JwtAuthGuard` must run before `RolesGuard`, since `RolesGuard` reads `request.user`, which `JwtAuthGuard` attaches.
+Ordering: `JwtAuthGuard` must run before `RolesGuard`, since `RolesGuard` reads `request.user`, which `JwtAuthGuard` attaches; both are provided by `AuthModule`, in that order. `ThrottlerGuard` is provided by a different module (`RateLimitModule`), and global guards run in module registration order, so its position relative to the other two follows the order of the modules in `AppModule.imports`. It does not depend on `request.user` (it tracks by IP), so either relative order is functionally correct; which one applies was not verified against the final `AppModule`.
 
 ## Global configuration
 
