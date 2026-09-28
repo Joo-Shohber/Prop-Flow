@@ -9,19 +9,7 @@ export function configureApp(app: INestApplication): void {
 
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
-  app.use(
-    helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: [`'self'`],
-          scriptSrc: [`'self'`, 'https://cdn.jsdelivr.net'],
-          styleSrc: [`'self'`, 'https://cdn.jsdelivr.net', `'unsafe-inline'`],
-          imgSrc: [`'self'`, 'data:', 'https://cdn.jsdelivr.net'],
-          connectSrc: [`'self'`, 'https://cdn.jsdelivr.net'],
-        },
-      },
-    }),
-  );
+  app.use(helmet({ contentSecurityPolicy: false }));
   app.use(cookieParser());
 
   app.enableCors({
