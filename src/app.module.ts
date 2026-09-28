@@ -20,8 +20,10 @@ import { NotificationsModule } from './notifications/notifications.module.js';
 import { AnalyticsModule } from './analytics/analytics.module.js';
 import { CacheInvalidationModule } from './common/cache/cache-invalidation.module.js';
 import { RateLimitModule } from './common/throttler/rate-limit.module.js';
+import { AppController } from './app.controller.js';
 
 @Module({
+  controllers: [AppController],
   imports: [
     RedisModule,
     CacheInvalidationModule,
