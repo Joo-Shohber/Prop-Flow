@@ -12,6 +12,7 @@ import type { ImageRef } from '../../common/uploads/image-ref.interface.js';
 export const userAvatar: ImageRef = {
   url: 'https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460__480.png',
   publicId: 'null',
+  source: 'default',
 };
 
 @Entity('users')
@@ -19,7 +20,6 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Index()
   @Column({ type: 'varchar', length: 255, unique: true })
   email: string;
 

@@ -36,13 +36,16 @@ export class UploadService {
         `A maximum of ${maxCount} images is allowed`,
       );
     }
+
     return Promise.all(files.map((file) => this.uploadOne(file, folder)));
   }
 
   async deleteImages(images: ImageRef[]): Promise<void> {
     await Promise.all(
       images.map((image) =>
-        cloudinary.uploader.destroy(image.publicId).catch((error) => this.logger.error(error)),
+        cloudinary.uploader
+          .destroy(image.publicId)
+          .catch((error) => this.logger.error(error)),
       ),
     );
   }
@@ -57,7 +60,6 @@ export class UploadService {
       );
     }
 
-    // Trust the file's actual bytes, not the client-supplied extension or mimetype.
     const detected = await fileTypeFromBuffer(file.buffer);
     if (
       !detected ||
@@ -74,9 +76,14 @@ export class UploadService {
         (error, result) => {
           if (error || !result)
             return reject(error ?? new Error('Upload failed'));
-          resolve({ url: result.secure_url, publicId: result.public_id });
+          resolve({
+            url: result.secure_url,
+            publicId: result.public_id,
+            source: 'cloudinary',
+          });
         },
       );
+
       Readable.from(file.buffer).pipe(stream);
     });
   }

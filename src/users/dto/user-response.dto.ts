@@ -2,8 +2,9 @@ import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '../enums/user-role.enum.js';
 
 class ImageRefDto {
-  @ApiProperty() url!: string;
-  @ApiProperty() publicId!: string;
+  @ApiProperty() url: string;
+  @ApiProperty() publicId: string;
+  @ApiProperty() avatar: string;
 }
 
 export class UserResponseDto {
@@ -19,7 +20,7 @@ export class UserResponseDto {
 
   @ApiProperty({ enum: UserRole }) role: UserRole;
 
-  @ApiProperty({ nullable: true, type: ImageRefDto }) avatar: ImageRefDto | null;
+  @ApiProperty({ nullable: true, type: ImageRefDto }) avatar: ImageRefDto;
 
   @ApiProperty() isActive: boolean;
 

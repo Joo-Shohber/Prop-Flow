@@ -29,7 +29,7 @@ import { PasswordService } from './password.service.js';
 import { GoogleProfile } from './google.service.js';
 
 const INVALID_OTP_MESSAGE = 'Invalid or expired verification code';
-const OTP_SENT_MESSAGE =
+const OTP_SEND_MESSAGE =
   'If the account exists, a verification code has been sent to the email address';
 
 @Injectable()
@@ -54,7 +54,7 @@ export class AuthService {
    * @returns The newly created user.
    * @throws ConflictException If the email is already registered.
    */
-  async register(dto: RegisterDto): Promise<User> {
+  async register(dto: RegisterDto): Promise<MessageResponseDto> {
     if (await this.usersService.findByEmail(dto.email)) {
       throw new ConflictException('Email is already registered');
     }
@@ -66,7 +66,9 @@ export class AuthService {
     });
 
     await this.sendOtp(user.email, OtpPurpose.EMAIL_VERIFICATION);
-    return user;
+    return {
+      message: 'Account created successfully. Please verify your email.',
+    };
   }
 
   /**
@@ -237,7 +239,7 @@ export class AuthService {
     if (user && user.isActive && !user.isEmailVerified) {
       await this.sendOtp(user.email, OtpPurpose.EMAIL_VERIFICATION);
     }
-    return { message: OTP_SENT_MESSAGE };
+    return { message: OTP_SEND_MESSAGE };
   }
 
   /**
@@ -250,7 +252,7 @@ export class AuthService {
     if (user && user.isActive && user.isEmailVerified) {
       await this.sendOtp(user.email, OtpPurpose.PASSWORD_RESET);
     }
-    return { message: OTP_SENT_MESSAGE };
+    return { message: OTP_SEND_MESSAGE };
   }
 
   /**
@@ -266,8 +268,7 @@ export class AuthService {
       dto.otp,
     );
     const user = valid ? await this.usersService.findByEmail(dto.email) : null;
-    if (!user || !user.isActive)
-      throw new BadRequestException(INVALID_OTP_MESSAGE);
+    if (!user || !user.isActive) throw new BadRequestException(INVALID_OTP_MESSAGE);
 
     const passwordHash = await this.passwordService.hash(dto.newPassword);
     await this.dataSource.transaction(async (manager) => {

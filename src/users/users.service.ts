@@ -19,6 +19,7 @@ import { UploadService } from '../common/uploads/upload.service.js';
 import { DataSource } from 'typeorm';
 import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
 import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
+import { ImageRef } from '../common/uploads/image-ref.interface.js';
 
 const USER_SORT_FIELDS = [
   'createdAt',
@@ -121,8 +122,10 @@ export class UsersService {
       'propflow/avatars',
       1,
     );
-    if (user.avatar.publicId !== 'null')
+    if (user.avatar.source === 'cloudinary') {
       await this.uploadService.deleteImages([user.avatar]);
+    }
+
     user.avatar = uploaded;
     return this.userRepo.save(user);
   }
@@ -133,12 +136,16 @@ export class UsersService {
    * @returns The updated user with the default avatar.
    */
   async removeAvatar(user: User): Promise<User> {
-    if (user.avatar.publicId === 'null') {
-      throw new BadRequestException('You hava not avatar');
+    if (user.avatar.source === 'default') {
+      throw new BadRequestException('You have no avatar');
     }
-    await this.uploadService.deleteImages([user.avatar]);
+
+    if (user.avatar.source === 'cloudinary') {
+      await this.uploadService.deleteImages([user.avatar]);
+    }
 
     user.avatar = userAvatar;
+
     return this.userRepo.save(user);
   }
 
@@ -187,7 +194,7 @@ export class UsersService {
 
     const [data, total] = await this.userRepo.findAndCount({
       where,
-      order: { [sortBy]: sortOrder } as FindOptionsOrder<User>, // EX:- order: { email: DESC }
+      order: { [sortBy]: sortOrder } as FindOptionsOrder<User>,
       skip: toSkip(query),
       take: query.limit,
     });
@@ -307,6 +314,7 @@ export class UsersService {
     googleId: string;
     firstName: string;
     lastName: string;
+    avatar: ImageRef;
   }): Promise<User> {
     const saved = await this.userRepo.save(
       this.userRepo.create({
@@ -316,6 +324,7 @@ export class UsersService {
         isEmailVerified: true,
       }),
     );
+
     return this.findById(saved.id);
   }
 }

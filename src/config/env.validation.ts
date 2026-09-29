@@ -15,8 +15,12 @@ const envSchema = z.object({
   // DB_USERNAME: z.string().min(1),
   // DB_PASSWORD: z.string(),
   // DB_NAME: z.string().min(1),
-  DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, 'must start with postgres:// or postgresql://'),
-
+  DATABASE_URL: z
+    .string()
+    .regex(
+      /^postgres(ql)?:\/\//,
+      'must start with postgres:// or postgresql://',
+    ),
 
   REDIS_HOST: z.string().min(1),
   REDIS_PORT: z.coerce.number().int().min(1).max(65535).default(6379),

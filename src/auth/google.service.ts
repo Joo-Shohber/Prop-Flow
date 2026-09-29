@@ -2,12 +2,15 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { Profile, Strategy, VerifyCallback } from 'passport-google-oauth20';
+import { ImageRef } from '../common/uploads/image-ref.interface.js';
+import { userAvatar } from '../users/entities/user.entity.js';
 
 export interface GoogleProfile {
-  googleId: string;
-  email: string;
   firstName: string;
   lastName: string;
+  googleId: string;
+  email: string;
+  avatar: ImageRef;
 }
 
 @Injectable()
@@ -32,11 +35,17 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       done(new Error('Google account has no email'), false);
       return;
     }
+
     const result: GoogleProfile = {
       googleId: profile.id,
       email,
       firstName: profile.name?.givenName ?? profile.displayName ?? 'Google',
       lastName: profile.name?.familyName ?? 'User',
+      avatar: {
+        url: profile.photos?.[0]?.value ?? userAvatar.url,
+        publicId: 'null',
+        source: 'google',
+      },
     };
     done(null, result);
   }

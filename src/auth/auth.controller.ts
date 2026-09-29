@@ -48,17 +48,17 @@ import { Throttle } from '@nestjs/throttler';
 @Controller('auth')
 export class AuthController {
   constructor(
-    private readonly auth: AuthService,
+    private readonly authService: AuthService,
     private readonly config: ConfigService,
   ) {}
 
   @Post('register')
   @ApiOperation({ summary: 'Register a TENANT or OWNER account' })
-  @ApiCreatedResponse({ type: UserResponseDto })
+  @ApiCreatedResponse({ type: MessageResponseDto })
   @ApiBadRequestResponse({ description: 'Validation failed' })
   @ApiConflictResponse({ description: 'Email is already registered' })
-  register(@Body() dto: RegisterDto): Promise<User> {
-    return this.auth.register(dto);
+  register(@Body() dto: RegisterDto): Promise<MessageResponseDto> {
+    return this.authService.register(dto);
   }
 
   @Post('login')
@@ -73,7 +73,7 @@ export class AuthController {
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { refreshToken, ...body } = await this.auth.login(dto);
+    const { refreshToken, ...body } = await this.authService.login(dto);
     setRefreshTokenCookie(res, refreshToken, this.config);
     return body;
   }
@@ -91,7 +91,9 @@ export class AuthController {
     @Req() req: Request & { user: GoogleProfile },
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { refreshToken, ...body } = await this.auth.loginWithGoogle(req.user);
+    const { refreshToken, ...body } = await this.authService.loginWithGoogle(
+      req.user,
+    );
     setRefreshTokenCookie(res, refreshToken, this.config);
     return body;
   }
@@ -113,7 +115,7 @@ export class AuthController {
     const token = req.cookies?.[REFRESH_TOKEN_COOKIE];
     if (!token) throw new UnauthorizedException('Missing refresh token');
 
-    const { refreshToken, ...body } = await this.auth.refresh(token);
+    const { refreshToken, ...body } = await this.authService.refresh(token);
     setRefreshTokenCookie(res, refreshToken, this.config);
     return body;
   }
@@ -129,8 +131,10 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<null> {
     const token = req.cookies?.[REFRESH_TOKEN_COOKIE];
-    if (token) await this.auth.logout(token);
-    clearRefreshTokenCookie(res, this.config);
+    if (token) {
+      await this.authService.logout(token);
+      clearRefreshTokenCookie(res, this.config);
+    }
     return null;
   }
 
@@ -143,7 +147,7 @@ export class AuthController {
       'Invalid or expired code (5 wrong attempts invalidate the code)',
   })
   verifyEmail(@Body() dto: VerifyEmailDto): Promise<MessageResponseDto> {
-    return this.auth.verifyEmail(dto);
+    return this.authService.verifyEmail(dto);
   }
 
   @Post('resend-verification-otp')
@@ -155,7 +159,7 @@ export class AuthController {
   })
   @ApiOkResponse({ type: MessageResponseDto })
   resendVerificationOtp(@Body() dto: EmailDto): Promise<MessageResponseDto> {
-    return this.auth.resendVerificationOtp(dto);
+    return this.authService.resendVerificationOtp(dto);
   }
 
   @Post('forgot-password')
@@ -167,7 +171,7 @@ export class AuthController {
   })
   @ApiOkResponse({ type: MessageResponseDto })
   forgotPassword(@Body() dto: EmailDto): Promise<MessageResponseDto> {
-    return this.auth.forgotPassword(dto);
+    return this.authService.forgotPassword(dto);
   }
 
   @Post('reset-password')
@@ -180,7 +184,14 @@ export class AuthController {
   @ApiBadRequestResponse({
     description: 'Invalid or expired code, or validation failed',
   })
-  resetPassword(@Body() dto: ResetPasswordDto): Promise<MessageResponseDto> {
-    return this.auth.resetPassword(dto);
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<MessageResponseDto> {
+    const result = await this.authService.resetPassword(dto);
+
+    clearRefreshTokenCookie(res, this.config);
+
+    return result;
   }
 }

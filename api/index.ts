@@ -7,8 +7,6 @@ import express from 'express';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 
-console.log('Running on Node', process.version);
-
 const server = express();
 let bootstrapped: Promise<void> | null = null;
 

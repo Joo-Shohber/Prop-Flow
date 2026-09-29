@@ -603,7 +603,7 @@ export class MaintenanceService {
 
     const saved = await this.maintenanceRepo.save(maintenance);
 
-    // await this.cache.invalidateDashboard();
+    await this.cache.invalidateDashboard();
 
     return saved;
   }

@@ -17,7 +17,7 @@ export interface ApiSuccessResponse<T = unknown> {
 @Injectable()
 export class ResponseInterceptor implements NestInterceptor {
   intercept(
-    context: ExecutionContext,
+    _context: ExecutionContext,
     next: CallHandler,
   ): Observable<ApiSuccessResponse> {
     return next.handle().pipe(
