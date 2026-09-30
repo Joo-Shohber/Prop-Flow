@@ -297,8 +297,17 @@ export class UsersService {
    * @param googleId - The unique Google account ID.
    * @returns The updated user.
    */
-  async linkGoogleAccount(user: User, googleId: string): Promise<User> {
+  async linkGoogleAccount(
+    user: User,
+    googleId: string,
+    avatar: ImageRef,
+  ): Promise<User> {
     user.googleId = googleId;
+
+    if (user.avatar.source === 'default') {
+      user.avatar = avatar;
+    }
+
     return this.userRepo.save(user);
   }
 

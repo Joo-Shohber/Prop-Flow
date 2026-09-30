@@ -150,6 +150,7 @@ export class AuthService {
         user = await this.usersService.linkGoogleAccount(
           existing,
           profile.googleId,
+          profile.avatar,
         );
       } else {
         user = await this.usersService.createFromGoogle(profile);
@@ -268,7 +269,8 @@ export class AuthService {
       dto.otp,
     );
     const user = valid ? await this.usersService.findByEmail(dto.email) : null;
-    if (!user || !user.isActive) throw new BadRequestException(INVALID_OTP_MESSAGE);
+    if (!user || !user.isActive)
+      throw new BadRequestException(INVALID_OTP_MESSAGE);
 
     const passwordHash = await this.passwordService.hash(dto.newPassword);
     await this.dataSource.transaction(async (manager) => {
