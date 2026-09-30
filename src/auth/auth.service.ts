@@ -87,7 +87,7 @@ export class AuthService {
     if (!user) throw new BadRequestException(INVALID_OTP_MESSAGE);
 
     await this.usersService.makeEmailVerified(user.id);
-    return { message: 'Email verified successfully' };
+    return { message: 'Email verified successfully. Please log in' };
   }
 
   /**
