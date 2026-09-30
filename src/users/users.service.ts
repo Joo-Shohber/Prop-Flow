@@ -303,6 +303,7 @@ export class UsersService {
     avatar: ImageRef,
   ): Promise<User> {
     user.googleId = googleId;
+    user.isEmailVerified = true;
 
     if (user.avatar.source === 'default') {
       user.avatar = avatar;
