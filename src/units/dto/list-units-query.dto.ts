@@ -42,4 +42,18 @@ export class ListUnitsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsUUID()
   propertyId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  minPrice?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  maxPrice?: number;
 }

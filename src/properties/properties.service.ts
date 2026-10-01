@@ -63,19 +63,35 @@ export class PropertiesService {
   }
 
   /**
-   * Retrieves a property by ID and verifies that the actor has permission to manage it.
-   * @param actor The authenticated user performing the operation.
+   * Retrieves a property by ID and returns available units for tenants.
+   * @param actor The authenticated user requesting the property.
    * @param id Property ID.
-   * @returns The property if the actor has access.
+   * @returns The property, with available units for tenants.
    * @throws NotFoundException If the property does not exist.
-   * @throws ForbiddenException If the actor does not have access to the property.
+   * @throws ForbiddenException If the actor does not have access to manage the property.
    */
-  async findForActor(actor: User, id: string): Promise<Property> {
+  async findForActor(actor: User, id: string) {
     const property = await this.findOne(id);
-    if (!canManageProperty(actor, property)) {
-      throw new ForbiddenException('You do not have access to this property');
+
+    if (actor.role !== UserRole.TENANT) {
+      if (!canManageProperty(actor, property)) {
+        throw new ForbiddenException('You do not have access to this property');
+      }
+
+      return property;
     }
-    return property;
+
+    const units = await this.unitsRepo.find({
+      where: {
+        propertyId: property.id,
+        status: UnitStatus.AVAILABLE,
+      },
+    });
+
+    return {
+      ...property,
+      units,
+    };
   }
 
   /**
@@ -280,7 +296,7 @@ export class PropertiesService {
     query: ListPropertiesQueryDto,
   ): FindOptionsWhere<Property> {
     const where: FindOptionsWhere<Property> = {};
-    if (actor.role !== UserRole.ADMIN) where.ownerId = actor.id;
+    if (actor.role === UserRole.OWNER) where.ownerId = actor.id;
     if (query.city) where.city = query.city;
     if (query.propertyType) where.propertyType = query.propertyType;
     return where;

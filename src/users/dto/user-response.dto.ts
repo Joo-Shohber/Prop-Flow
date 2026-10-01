@@ -3,8 +3,10 @@ import { UserRole } from '../enums/user-role.enum.js';
 
 class ImageRefDto {
   @ApiProperty() url: string;
+
   @ApiProperty() publicId: string;
-  @ApiProperty() avatar: string;
+
+  @ApiProperty() source: string;
 }
 
 export class UserResponseDto {
@@ -25,6 +27,8 @@ export class UserResponseDto {
   @ApiProperty() isActive: boolean;
 
   @ApiProperty() isEmailVerified: boolean;
+
+  @ApiProperty({ type: [ImageRefDto] }) images: ImageRefDto[];
 
   @ApiProperty() createdAt: Date;
 

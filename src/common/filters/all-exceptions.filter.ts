@@ -24,7 +24,7 @@ const PG_ERRORS: Record<string, { statusCode: number; message: string }> = {
   },
   '23P01': {
     statusCode: HttpStatus.CONFLICT,
-    message: 'The requested value conflicts with an existing record',
+    message: 'The requested dates conflict with an existing lease',
   },
   '23503': {
     statusCode: HttpStatus.CONFLICT,

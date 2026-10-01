@@ -45,3 +45,12 @@ export const canCloseOrCancelMaintenance = (
   isAdmin(user) ||
   request.tenantId === user.id ||
   request.unit.property.ownerId === user.id;
+
+export const canAccessRentalRequest = (
+  user: Pick<User, 'id' | 'role'>,
+  request: { tenantId: string; unit: { property: { ownerId: string } } },
+): boolean => {
+  if (isAdmin(user)) return true;
+  if (user.role === UserRole.TENANT) return request.tenantId === user.id;
+  return request.unit.property.ownerId === user.id;
+};

@@ -12,6 +12,7 @@ import {
 import { decimalTransformer } from '../../common/utils/decimal.transformer.js';
 import { Property } from '../../properties/entities/property.entity.js';
 import { UnitStatus } from '../enums/unit-status.enum.js';
+import { ImageRef } from '../../common/uploads/image-ref.interface.js';
 
 @Entity('units')
 @Unique(['propertyId', 'building', 'unitNumber'])
@@ -57,6 +58,12 @@ export class Unit {
   @Index()
   @Column({ type: 'enum', enum: UnitStatus, default: UnitStatus.AVAILABLE })
   status: UnitStatus;
+
+  @Column({ type: 'integer' })
+  rentAmount: number;
+
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  images: ImageRef[];
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

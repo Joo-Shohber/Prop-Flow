@@ -658,6 +658,39 @@ export class MaintenanceService {
     return saved;
   }
 
+  async addImages(
+    actor: User,
+    id: string,
+    files: Express.Multer.File[],
+  ): Promise<MaintenanceRequest> {
+    const request = await this.findForActor(actor, id);
+    if (!canCloseOrCancelMaintenance(actor, request)) {
+      throw new ForbiddenException(
+        'You do not have access to this maintenance request',
+      );
+    }
+    if (request.status !== MaintenanceStatus.OPEN) {
+      throw new ConflictException(
+        'Images can only be added while the request is OPEN',
+      );
+    }
+    if (request.images.length + files.length > MAINTENANCE_MAX_IMAGES) {
+      throw new ConflictException(
+        `A request can have at most ${MAINTENANCE_MAX_IMAGES} images`,
+      );
+    }
+
+    const uploaded = await this.uploadService.uploadImages(
+      files,
+      'propflow/maintenance',
+      MAINTENANCE_MAX_IMAGES,
+    );
+    request.images = [...request.images, ...uploaded];
+    const saved = await this.maintenanceRepo.save(request);
+    await this.cache.invalidateDashboard();
+    return saved;
+  }
+
   private async lock(
     manager: EntityManager,
     id: string,

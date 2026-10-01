@@ -151,8 +151,7 @@ export class LeasesService {
    * @param actor - The user creating the lease.
    * @param dto - Lease creation data.
    * @returns The newly created lease.
-   * @throws BadRequestException If the dates are invalid or the tenant
-   * is not an active TENANT.
+   * @throws BadRequestException If the dates are invalid or the tenant is not an active TENANT.
    * @throws ForbiddenException If the actor cannot access the unit.
    * @throws ConflictException If the lease conflicts with an existing lease.
    */
@@ -180,6 +179,7 @@ export class LeasesService {
         endDate: dto.endDate,
         notes: dto.notes ?? null,
         status: LeaseStatus.PENDING,
+        rentAmount: unit.rentAmount,
       });
       const saved = await manager.save(lease);
 

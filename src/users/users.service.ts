@@ -4,7 +4,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { FindOptionsOrder, FindOptionsWhere, Repository } from 'typeorm';
+import { FindOptionsOrder, FindOptionsWhere, ILike, Repository } from 'typeorm';
 import {
   Paginated,
   resolveSort,
@@ -20,6 +20,7 @@ import { DataSource } from 'typeorm';
 import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
 import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 import { ImageRef } from '../common/uploads/image-ref.interface.js';
+import { ListUserDirectoryQueryDto } from './dto/list-user-directory-query.dto.js';
 
 const USER_SORT_FIELDS = [
   'createdAt',
@@ -195,6 +196,35 @@ export class UsersService {
     const [data, total] = await this.userRepo.findAndCount({
       where,
       order: { [sortBy]: sortOrder } as FindOptionsOrder<User>,
+      skip: toSkip(query),
+      take: query.limit,
+    });
+
+    return Paginated.of(data, total, query);
+  }
+
+  /**
+   * A minimal, safe directory for OWNER/ADMIN to find an active TENANT
+   * (for creating a lease) or MAINTENANCE_STAFF (for assigning a maintenance
+   * request). Deliberately excludes ADMIN/OWNER accounts and every field
+   * beyond name/email/role — this is not the admin user-management endpoint.
+   */
+  async findDirectory(
+    query: ListUserDirectoryQueryDto,
+  ): Promise<Paginated<User>> {
+    const base = { role: query.role, isActive: true };
+    const where: FindOptionsWhere<User> | FindOptionsWhere<User>[] =
+      query.search
+        ? [
+            { ...base, firstName: ILike(`%${query.search}%`) },
+            { ...base, lastName: ILike(`%${query.search}%`) },
+            { ...base, email: ILike(`%${query.search}%`) },
+          ]
+        : base;
+
+    const [data, total] = await this.userRepo.findAndCount({
+      where,
+      order: { firstName: 'ASC' },
       skip: toSkip(query),
       take: query.limit,
     });

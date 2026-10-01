@@ -48,21 +48,25 @@ Dev-only: `@nestjs/cli`, `@types/*` packages, `typeorm-ts-node-esm` (via the `mi
 
 ## Roles & permission matrix
 
-| Action                                |            TENANT             |        OWNER         |       MAINTENANCE_STAFF        |       ADMIN       |
-| ------------------------------------- | :---------------------------: | :------------------: | :----------------------------: | :---------------: |
-| Manage own profile / avatar           |              Yes              |         Yes          |              Yes               |        Yes        |
-| Create/manage properties & units      |              No               |      Yes (own)       |               No               |     Yes (all)     |
-| View leases                           |           Yes (own)           | Yes (own properties) |               No               |     Yes (all)     |
-| Create/activate/terminate leases      |              No               |   Yes (own units)    |               No               |        Yes        |
-| Create maintenance requests           | Yes (own active lease's unit) |          No          |               No               |        No         |
-| Assign maintenance requests           |              No               | Yes (own properties) |               No               |        Yes        |
-| Start / complete maintenance requests |              No               |          No          | Yes (only if assigned to them) |        No         |
-| Close / cancel maintenance requests   |           Yes (own)           | Yes (own properties) |               No               |        Yes        |
-| Receive notifications                 |              Yes              |         Yes          |              Yes               |        Yes        |
-| View analytics dashboard              |              No               | Yes (own properties) |               No               | Yes (system-wide) |
-| List/manage all users, view audit log |              No               |          No          |               No               |        Yes        |
+| Action                                |                   TENANT                   |        OWNER         |       MAINTENANCE_STAFF        |       ADMIN       |
+| ------------------------------------- | :----------------------------------------: | :------------------: | :----------------------------: | :---------------: |
+| Manage own profile / avatar           |                    Yes                     |         Yes          |              Yes               |        Yes        |
+| View properties & units               | Yes (all properties, AVAILABLE units only) |      Yes (own)       |               No               |     Yes (all)     |
+| Create/manage properties & units      |                     No                     |      Yes (own)       |               No               |     Yes (all)     |
+| View leases                           |                 Yes (own)                  | Yes (own properties) |               No               |     Yes (all)     |
+| Create/activate/terminate leases      |                     No                     |   Yes (own units)    |               No               |        Yes        |
+| Create rental requests                |           Yes (AVAILABLE units)            |          No          |               No               |        No         |
+| View rental requests                  |                 Yes (own)                  | Yes (own properties) |               No               |     Yes (all)     |
+| Approve / reject rental requests      |                     No                     | Yes (own properties) |               No               |        Yes        |
+| Create maintenance requests           |       Yes (own active lease's unit)        |          No          |               No               |        No         |
+| Assign maintenance requests           |                     No                     | Yes (own properties) |               No               |        Yes        |
+| Start / complete maintenance requests |                     No                     |          No          | Yes (only if assigned to them) |        No         |
+| Close / cancel maintenance requests   |                 Yes (own)                  | Yes (own properties) |               No               |        Yes        |
+| Receive notifications                 |                    Yes                     |         Yes          |              Yes               |        Yes        |
+| View analytics dashboard              |                     No                     | Yes (own properties) |               No               | Yes (system-wide) |
+| List/manage all users, view audit log |                     No                     |          No          |               No               |        Yes        |
 
-Enforced two ways: a global `RolesGuard` (coarse, `@Roles()` on each route) **and** a resource-level policy check inside the service for every read/write (`canManageProperty`, `canAccessLease`, `canAccessMaintenance`, `canCloseOrCancelMaintenance` in `common/policies/policy.utils.ts`) — this second layer is what stops IDOR (an OWNER passing another owner's property/unit/lease ID).
+Enforced two ways: a global `RolesGuard` (coarse, `@Roles()` on each route) **and** a resource-level policy check inside the service for every read/write (`canManageProperty`, `canAccessLease`, `canAccessRentalRequest`, `canAccessMaintenance`, `canCloseOrCancelMaintenance` in `common/policies/policy.utils.ts`) — this second layer is what stops IDOR (an OWNER passing another owner's property/unit/lease/rental-request ID).
 
 ## Architecture
 
@@ -79,8 +83,8 @@ Client (Web / Mobile / Swagger)
  Controllers (thin) -> Services (business logic, transactions, policy checks)
         |
         +-- Auth ---------- Users ---------- Properties ---------- Units
-        +-- Leases -------- Maintenance ---- Notifications -------- AuditLogs
-        +-- Analytics
+        +-- Leases -------- RentalRequests -- Maintenance -------- Notifications
+        +-- AuditLogs ----- Analytics
         |
         v
  Common infra: RedisService . UploadService(Cloudinary) . EmailService(SMTP)
@@ -143,20 +147,22 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 
 ### `units`
 
-| Column                   | Type                                        | Notes                        |
-| ------------------------ | ------------------------------------------- | ---------------------------- |
-| `id`                     | uuid PK                                     |                              |
-| `unitNumber`             | varchar(50)                                 |                              |
-| `building`               | varchar(100)                                | free-text label              |
-| `floor`                  | int, nullable                               |                              |
-| `area`                   | numeric(10,2)                               |                              |
-| `bedrooms`               | smallint                                    | indexed                      |
-| `bathrooms`              | smallint                                    |                              |
-| `description`            | text, nullable                              |                              |
-| `propertyId`             | uuid FK -> properties, `CASCADE`            | indexed                      |
-| `status`                 | enum `AVAILABLE / RENTED / MAINTENANCE`     | default `AVAILABLE`, indexed |
-| `createdAt`, `updatedAt` | timestamptz                                 |                              |
-| —                        | `UNIQUE (propertyId, building, unitNumber)` |                              |
+| Column                   | Type                                        | Notes                                                            |
+| ------------------------ | ------------------------------------------- | ---------------------------------------------------------------- |
+| `id`                     | uuid PK                                     |                                                                  |
+| `unitNumber`             | varchar(50)                                 |                                                                  |
+| `building`               | varchar(100)                                | free-text label                                                  |
+| `floor`                  | int, nullable                               |                                                                  |
+| `area`                   | numeric(10,2)                               |                                                                  |
+| `rentAmount`             | numeric(10,2)                               | current asking rent; snapshotted onto rental requests and leases |
+| `bedrooms`               | smallint                                    | indexed                                                          |
+| `bathrooms`              | smallint                                    |                                                                  |
+| `description`            | text, nullable                              |                                                                  |
+| `propertyId`             | uuid FK -> properties, `CASCADE`            | indexed                                                          |
+| `status`                 | enum `AVAILABLE / RENTED / MAINTENANCE`     | default `AVAILABLE`, indexed                                     |
+| `createdAt`, `updatedAt` | timestamptz                                 |                                                                  |
+| `images`                 | jsonb `{url, publicId}[]`                   | default `[]`, up to 10                                           |
+| —                        | `UNIQUE (propertyId, building, unitNumber)` |                                                                  |
 
 ### `leases`
 
@@ -166,6 +172,7 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 | `tenantId`               | uuid FK -> users, `RESTRICT`                                                                                           | indexed                                                                                |
 | `unitId`                 | uuid FK -> units, `RESTRICT`                                                                                           | indexed                                                                                |
 | `startDate`, `endDate`   | date                                                                                                                   |                                                                                        |
+| `rentAmount`             | numeric(10,2)                                                                                                          | copied from the unit / approved rental request when the lease is created               |
 | `status`                 | enum `PENDING / ACTIVE / TERMINATED / EXPIRED`                                                                         | default `PENDING`, indexed                                                             |
 | `notes`                  | text, nullable                                                                                                         |                                                                                        |
 | `createdAt`, `updatedAt` | timestamptz                                                                                                            |                                                                                        |
@@ -173,6 +180,22 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 | —                        | `EXCLUDE USING gist (unitId WITH =, daterange(startDate, endDate, '[]') WITH &&) WHERE status IN ('PENDING','ACTIVE')` | requires `btree_gist`; no two PENDING/ACTIVE leases of the same unit can overlap dates |
 | —                        | partial `UNIQUE (unitId) WHERE status = 'ACTIVE'`                                                                      | at most one ACTIVE lease per unit                                                      |
 | —                        | composite index `(status, endDate)`                                                                                    | used by the lazy-expiration sweep                                                      |
+
+### `rental_requests`
+
+| Column                   | Type                                 | Notes                                                         |
+| ------------------------ | ------------------------------------ | ------------------------------------------------------------- |
+| `id`                     | uuid PK                              |                                                               |
+| `tenantId`               | uuid FK -> users, `RESTRICT`         | indexed — always the authenticated tenant, never client input |
+| `unitId`                 | uuid FK -> units, `RESTRICT`         | indexed; the property is reached through `unit -> property`   |
+| `startDate`, `endDate`   | date                                 | same format and semantics as leases                           |
+| `rentAmount`             | numeric(10,2)                        | snapshot of the unit's `rentAmount` at request time           |
+| `message`                | text, nullable                       | max 1000 characters                                           |
+| `status`                 | enum `PENDING / APPROVED / REJECTED` | default `PENDING`, indexed                                    |
+| `createdAt`, `updatedAt` | timestamptz                          |                                                               |
+| —                        | `CHECK (startDate < endDate)`        |                                                               |
+
+There is deliberately no overlap constraint on this table: a request does not reserve a unit. Conflicts are resolved when a request is approved, by the `leases` constraints above.
 
 ### `maintenance_requests`
 
@@ -207,31 +230,31 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 
 ### `notifications`
 
-| Column              | Type                                                                                                                          | Notes                                  |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `id`                | uuid PK                                                                                                                       |                                        |
-| `recipientId`       | uuid FK -> users, `CASCADE`                                                                                                   |                                        |
-| `type`              | enum `LEASE_CREATED / LEASE_ACTIVATED / LEASE_TERMINATED / MAINTENANCE_CREATED / MAINTENANCE_ASSIGNED / MAINTENANCE_RESOLVED` |                                        |
-| `title`             | varchar(150)                                                                                                                  |                                        |
-| `message`           | text                                                                                                                          |                                        |
-| `isRead`            | boolean                                                                                                                       | default `false`                        |
-| `relatedEntityType` | varchar(50), nullable                                                                                                         | e.g. `"Lease"`, `"MaintenanceRequest"` |
-| `relatedEntityId`   | uuid, nullable                                                                                                                |                                        |
-| `createdAt`         | timestamptz                                                                                                                   |                                        |
-| —                   | composite index `(recipientId, isRead)`                                                                                       |                                        |
+| Column              | Type                                                                                                                                                                                                       | Notes                                                     |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `id`                | uuid PK                                                                                                                                                                                                    |                                                           |
+| `recipientId`       | uuid FK -> users, `CASCADE`                                                                                                                                                                                |                                                           |
+| `type`              | enum `LEASE_CREATED / LEASE_ACTIVATED / LEASE_TERMINATED / RENTAL_REQUEST_CREATED / RENTAL_REQUEST_APPROVED / RENTAL_REQUEST_REJECTED / MAINTENANCE_CREATED / MAINTENANCE_ASSIGNED / MAINTENANCE_RESOLVED` |                                                           |
+| `title`             | varchar(150)                                                                                                                                                                                               |                                                           |
+| `message`           | text                                                                                                                                                                                                       |                                                           |
+| `isRead`            | boolean                                                                                                                                                                                                    | default `false`                                           |
+| `relatedEntityType` | varchar(50), nullable                                                                                                                                                                                      | e.g. `"Lease"`, `"RentalRequest"`, `"MaintenanceRequest"` |
+| `relatedEntityId`   | uuid, nullable                                                                                                                                                                                             |                                                           |
+| `createdAt`         | timestamptz                                                                                                                                                                                                |                                                           |
+| —                   | composite index `(recipientId, isRead)`                                                                                                                                                                    |                                                           |
 
 ### `audit_logs`
 
-| Column      | Type                                                                                                                                                                                   | Notes                                  |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `id`        | uuid PK                                                                                                                                                                                |                                        |
-| `userId`    | uuid FK -> users, `RESTRICT`                                                                                                                                                           | indexed — the actor                    |
-| `action`    | enum `PROPERTY_DELETED / LEASE_CREATED / LEASE_ACTIVATED / LEASE_TERMINATED / UNIT_STATUS_CHANGED / MAINTENANCE_ASSIGNED / MAINTENANCE_COMPLETED / USER_STATUS_CHANGED / ROLE_CHANGED` | indexed                                |
-| `entity`    | varchar(50)                                                                                                                                                                            | e.g. `"Property"`, `"Lease"` — indexed |
-| `entityId`  | uuid                                                                                                                                                                                   |                                        |
-| `metadata`  | jsonb, nullable                                                                                                                                                                        | e.g. `{previousStatus, newStatus}`     |
-| `ipAddress` | varchar(45), nullable                                                                                                                                                                  |                                        |
-| `createdAt` | timestamptz                                                                                                                                                                            |                                        |
+| Column      | Type                                                                                                                                                                                                                                                                                   | Notes                                                     |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `id`        | uuid PK                                                                                                                                                                                                                                                                                |                                                           |
+| `userId`    | uuid FK -> users, `RESTRICT`                                                                                                                                                                                                                                                           | indexed — the actor                                       |
+| `action`    | enum `PROPERTY_CREATED / PROPERTY_DELETED / LEASE_CREATED / LEASE_ACTIVATED / LEASE_TERMINATED / RENTAL_REQUEST_CREATED / RENTAL_REQUEST_APPROVED / RENTAL_REQUEST_REJECTED / UNIT_STATUS_CHANGED / MAINTENANCE_ASSIGNED / MAINTENANCE_COMPLETED / USER_STATUS_CHANGED / ROLE_CHANGED` | indexed                                                   |
+| `entity`    | varchar(50)                                                                                                                                                                                                                                                                            | e.g. `"Property"`, `"Lease"`, `"RentalRequest"` — indexed |
+| `entityId`  | uuid                                                                                                                                                                                                                                                                                   |                                                           |
+| `metadata`  | jsonb, nullable                                                                                                                                                                                                                                                                        | e.g. `{previousStatus, newStatus}`, `{leaseId, unitId}`   |
+| `ipAddress` | varchar(45), nullable                                                                                                                                                                                                                                                                  |                                                           |
+| `createdAt` | timestamptz                                                                                                                                                                                                                                                                            |                                                           |
 
 Two Postgres extensions required (auto-installed by TypeORM on connect, and also created explicitly as the first two statements of the initial migration): `uuid-ossp` (uuid generation) and `btree_gist` (the leases exclusion constraint).
 
@@ -245,7 +268,7 @@ AVAILABLE <-> MAINTENANCE   manual, via PATCH /units/:id/status
    RENTED                   only ever set by Lease activate / cleared by terminate or expiration
 ```
 
-A rented unit rejects any manual status change with `400`.
+A rented unit rejects any manual status change with `400`. A unit stays `AVAILABLE` while it only has `PENDING` leases (including leases created by approving a rental request); it becomes `RENTED` only when a lease is activated.
 
 ### Lease status state machine
 
@@ -255,11 +278,41 @@ PENDING          -> TERMINATED
 PENDING -> ACTIVE -> EXPIRED   (automatic)
 ```
 
+- A lease can be created two ways: directly (`POST /leases`, by an OWNER/ADMIN) or by approving a rental request (`POST /rental-requests/:id/approve`). Both produce a `PENDING` lease and go through the same lifecycle afterwards.
 - Creating a lease never checks unit availability beyond the exclusion constraint (dates can't overlap another PENDING/ACTIVE lease of the same unit).
 - **Activation** locks both the lease and the unit row (`pessimistic_write`), requires the lease to be `PENDING` and the unit to be `AVAILABLE`, then sets lease -> `ACTIVE` and unit -> `RENTED`, atomically.
 - **Termination** works from `PENDING` or `ACTIVE`; if it was `ACTIVE`, the unit goes back to `AVAILABLE`.
-- **Expiration is lazy, not scheduled.** A single set-based transaction — `UPDATE leases SET status='EXPIRED' WHERE status='ACTIVE' AND endDate < CURRENT_DATE`, then free the affected units — runs before every lease read/write and before every unit search. No cron job, no worker.
+- **Expiration is lazy, not scheduled.** A single set-based transaction — `UPDATE leases SET status='EXPIRED' WHERE status='ACTIVE' AND endDate < CURRENT_DATE`, then free the affected units — runs before every lease read/write, every rental-request create/approve, and before every unit search. No cron job, no worker.
 - Only a `PENDING` lease can be edited (dates/notes); the exclusion constraint re-validates on that update too.
+
+### Rental request state machine
+
+```
+PENDING -> APPROVED
+PENDING -> REJECTED
+```
+
+`APPROVED` and `REJECTED` are terminal. There is no `CANCELLED` status.
+
+End-to-end flow:
+
+```
+TENANT   GET /properties            -> all properties
+         GET /properties/:id        -> property + its AVAILABLE units
+         POST /rental-requests      -> RentalRequest(PENDING)
+OWNER / ADMIN
+         approve -> RentalRequest(APPROVED) + Lease(PENDING), unit stays AVAILABLE
+                    ... later, existing POST /leases/:id/activate
+                    -> Lease(ACTIVE) + Unit(RENTED)
+         reject  -> RentalRequest(REJECTED), no lease, unit unchanged
+```
+
+- **Discovery**: a tenant finds rentable units through `GET /properties` and `GET /properties/:id` (which returns the property plus its `AVAILABLE` units only — `RENTED`/`MAINTENANCE` units are hidden). There is no separate browse endpoint.
+- **Create**: TENANT only. `tenantId` is always the authenticated user and `status` is always `PENDING`; both are rejected if sent in the body (global `whitelist` + `forbidNonWhitelisted`). The backend re-verifies everything instead of trusting what the UI showed: the unit exists and its property is not deleted, the unit is `AVAILABLE`, dates are real `YYYY-MM-DD` dates with `startDate < endDate`, and no `PENDING`/`ACTIVE` lease overlaps the requested range (inclusive bounds, same semantics as the lease exclusion constraint). The unit's `rentAmount` is snapshotted onto the request. This is an early check only: a request does **not** reserve the unit, and several tenants may have pending requests for the same dates. The property owner is notified and the action is audited.
+- **Approve**: OWNER (own properties) or ADMIN, in one transaction. The request row is locked first (no joins, so `FOR UPDATE` is valid), then authorization is checked via `unit -> property -> ownerId`, then the status must be `PENDING`. The unit row is then locked (`pessimistic_write`), which serializes concurrent approvals for the same unit; the unit must still be `AVAILABLE`, the requester must still be an active `TENANT`, and the date range is re-checked against `PENDING`/`ACTIVE` leases. Then a `PENDING` lease is created (tenant, unit, dates and `rentAmount` from the request), the request becomes `APPROVED`, the tenant gets one `RENTAL_REQUEST_APPROVED` notification, and one `RENTAL_REQUEST_APPROVED` audit entry is written with `{leaseId, unitId}` in `metadata`. Approval does **not** change the unit status and does not reuse or alter the lease activation logic. The lease exclusion constraint remains the last line of defense against a concurrent direct `POST /leases`: a `23P01`/`23505` violation rolls the whole transaction back (the request stays `PENDING`) and is mapped to `409` by the global filter.
+- **Reject**: OWNER (own properties) or ADMIN, `PENDING` requests only. The request becomes `REJECTED`; no lease is created and the unit is untouched. The tenant is notified and the action is audited.
+- An approve/reject on a request that is already `APPROVED` or `REJECTED` returns `409`. ADMIN bypasses ownership checks but not state rules or lease constraints.
+- Pending requests that lose the race stay `PENDING` until the owner rejects them; approving one of them returns `409` if the dates now conflict with a lease.
 
 ### Maintenance status state machine
 
@@ -285,7 +338,7 @@ ASSIGNED -> CANCELLED
 
 ### Uploads
 
-- Property images (max 10), maintenance request images and completion images (max 5 each), user avatar (1) — all validated by actual file bytes via `file-type` (magic numbers), not by client-supplied filename or MIME type, and capped at 5 MB.
+- Property images (max 10), unit images (max 10), maintenance request images and completion images (max 5 each), user avatar (1) — all validated by actual file bytes via `file-type` (magic numbers), not by client-supplied filename or MIME type, and capped at 5 MB.
 - Deleting an image also deletes it from Cloudinary (`uploader.destroy`), not just from the database array.
 
 ## Environment variables — every one, explained
@@ -329,6 +382,7 @@ Requires: Node >= 22.12, PostgreSQL (with privileges to `CREATE EXTENSION`), Red
 | `start:dev`                    | watch-mode dev server                                           |
 | `start:prod`                   | runs `dist/`                                                    |
 | `build`                        | compiles TypeScript                                             |
+| `test`                         | runs the Vitest unit tests once                                 |
 | `migration:generate -- <path>` | diffs entities vs. DB, writes a migration                       |
 | `migration:create -- <path>`   | blank migration file                                            |
 | `migration:run`                | applies pending migrations                                      |
@@ -340,7 +394,7 @@ Requires: Node >= 22.12, PostgreSQL (with privileges to `CREATE EXTENSION`), Red
 - **`RedisService`** — thin `ioredis` wrapper: `getJson`/`setJson` (with TTL), `del`, `delByPattern` (SCAN-based, non-blocking).
 - **`UploadService`** — `uploadImages(files, folder, maxCount)` (magic-byte check -> Cloudinary `upload_stream`), `deleteImages(images)`.
 - **`EmailService`** — wraps `MailerService`, never throws (a failed send is logged, not surfaced to the caller — the OTP flow always returns the same response either way).
-- **`LeaseExpirationService.run()`** — the lazy-expiration sweep described above; called at the top of every lease/unit read and write.
+- **`LeaseExpirationService.run()`** — the lazy-expiration sweep described above; called at the top of every lease/rental-request/unit read and write that depends on current lease state.
 - **`CacheInvalidationService`** — `invalidateUnitsAndDashboard()`, `invalidateDashboard()`; thin wrappers around `RedisService.delByPattern`.
 - **`RedisThrottlerStorage`** — a from-scratch implementation of `@nestjs/throttler`'s `ThrottlerStorage` interface, using a single Lua script (fixed window + optional block period) so the increment-and-check is atomic.
 - **`AllExceptionsFilter`** — maps Postgres error codes to HTTP statuses: `23505`/`23P01` -> 409, `23503` -> 409, `23514`/`23502` -> 422, `22001`/`22P02` -> 400; hides internal messages in production.
@@ -369,38 +423,41 @@ All routes are prefixed `/api/v1`. Pagination query params (`page`, `limit` max 
 
 ### `/users`
 
-| Method & path       | Access | Body / query                                                        |
-| ------------------- | ------ | ------------------------------------------------------------------- |
-| `GET /me`           | self   | —                                                                   |
-| `PATCH /me`         | self   | `{firstName?, lastName?, phone?}`                                   |
-| `POST /me/avatar`   | self   | multipart `avatar` file                                             |
-| `DELETE /me/avatar` | self   | —                                                                   |
-| `GET /`             | ADMIN  | `?role=&isActive=` + pagination                                     |
-| `PATCH /:id/status` | ADMIN  | `{isActive}` — 422 self-deactivate; audited (`USER_STATUS_CHANGED`) |
-| `PATCH /:id/role`   | ADMIN  | `{role}` — 422 self-role-change; audited (`ROLE_CHANGED`)           |
+| Method & path       | Access       | Body / query                                                                                                                                                              |
+| ------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /me`           | self         | —                                                                                                                                                                         |
+| `PATCH /me`         | self         | `{firstName?, lastName?, phone?}`                                                                                                                                         |
+| `POST /me/avatar`   | self         | multipart `avatar` file                                                                                                                                                   |
+| `DELETE /me/avatar` | self         | —                                                                                                                                                                         |
+| `GET /`             | ADMIN        | `?role=&isActive=` + pagination                                                                                                                                           |
+| `PATCH /:id/status` | ADMIN        | `{isActive}` — 422 self-deactivate; audited (`USER_STATUS_CHANGED`)                                                                                                       |
+| `PATCH /:id/role`   | ADMIN        | `{role}` — 422 self-role-change; audited (`ROLE_CHANGED`)                                                                                                                 |
+| `GET /directory`    | OWNER, ADMIN | `?role=TENANT\|MAINTENANCE_STAFF&search=` + pagination — minimal `{id, firstName, lastName, email, role}` list of **active** users, for populating lease/assignment forms |
 
 ### `/properties`
 
-| Method & path        | Access                    | Body / query                                                                                              |
-| -------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `GET /`              | OWNER (own) / ADMIN (all) | `?search=&city=&propertyType=` + pagination                                                               |
-| `POST /`             | OWNER / ADMIN             | `{name, description?, propertyType, address, city, country, ownerId?}` (`ownerId` only honored for ADMIN) |
-| `GET /:id`           | owner or ADMIN            | —                                                                                                         |
-| `PATCH /:id`         | owner or ADMIN            | same fields as create, all optional, no `ownerId`                                                         |
-| `DELETE /:id`        | owner or ADMIN            | 409 if any unit is `RENTED`; soft delete; audited (`PROPERTY_DELETED`)                                    |
-| `POST /:id/images`   | owner or ADMIN            | multipart `images[]`, max 10 total, <=5MB each, jpeg/png/webp                                             |
-| `DELETE /:id/images` | owner or ADMIN            | `{publicId}`                                                                                              |
+| Method & path        | Access                                   | Body / query                                                                                                                            |
+| -------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /`              | TENANT (all) / OWNER (own) / ADMIN (all) | `?search=&city=&propertyType=` + pagination                                                                                             |
+| `POST /`             | OWNER / ADMIN                            | `{name, description?, propertyType, address, city, country, ownerId?}` (`ownerId` only honored for ADMIN); audited (`PROPERTY_CREATED`) |
+| `GET /:id`           | TENANT / owner / ADMIN                   | TENANT gets the property plus its `AVAILABLE` units only; owner/ADMIN get the property (403 if not the owner)                           |
+| `PATCH /:id`         | owner or ADMIN                           | same fields as create, all optional, no `ownerId`                                                                                       |
+| `DELETE /:id`        | owner or ADMIN                           | 409 if any unit is `RENTED`; soft delete; audited (`PROPERTY_DELETED`)                                                                  |
+| `POST /:id/images`   | owner or ADMIN                           | multipart `images[]`, max 10 total, <=5MB each, jpeg/png/webp                                                                           |
+| `DELETE /:id/images` | owner or ADMIN                           | `{publicId}`                                                                                                                            |
 
 ### Units — nested for creation, flat elsewhere
 
-| Method & path                        | Access                             | Body / query                                                                                                               |
-| ------------------------------------ | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `GET /units`                         | OWNER (own) / ADMIN (all) — cached | `?status=&bedrooms=&minArea=&maxArea=&propertyId=` + pagination                                                            |
-| `POST /properties/:propertyId/units` | owner of that property or ADMIN    | `{unitNumber, building, floor?, area, bedrooms, bathrooms, description?}` — 409 on duplicate `(building, unitNumber)`      |
-| `GET /units/:id`                     | owner or ADMIN                     | —                                                                                                                          |
-| `PATCH /units/:id`                   | owner or ADMIN                     | same fields as create, all optional (status excluded)                                                                      |
-| `DELETE /units/:id`                  | owner or ADMIN                     | —                                                                                                                          |
-| `PATCH /units/:id/status`            | owner or ADMIN                     | `{status: AVAILABLE\|MAINTENANCE}` — 400 if unit is `RENTED` or the transition is invalid; audited (`UNIT_STATUS_CHANGED`) |
+| Method & path                        | Access                                          | Body / query                                                                                                               |
+| ------------------------------------ | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `GET /units`                         | OWNER (own) / ADMIN (all) — cached              | `?status=&bedrooms=&minArea=&maxArea=&propertyId=` + pagination                                                            |
+| `POST /properties/:propertyId/units` | owner of that property or ADMIN                 | `{unitNumber, building, floor?, area, bedrooms, bathrooms, description?}` — 409 on duplicate `(building, unitNumber)`      |
+| `GET /units/:id`                     | TENANT (`AVAILABLE` units only) / owner / ADMIN | —                                                                                                                          |
+| `PATCH /units/:id`                   | owner or ADMIN                                  | same fields as create, all optional (status excluded)                                                                      |
+| `DELETE /units/:id`                  | owner or ADMIN                                  | —                                                                                                                          |
+| `PATCH /units/:id/status`            | owner or ADMIN                                  | `{status: AVAILABLE\|MAINTENANCE}` — 400 if unit is `RENTED` or the transition is invalid; audited (`UNIT_STATUS_CHANGED`) |
+| `POST /units/:id/images`             | owner or ADMIN                                  | multipart `images[]`, max 10 total, <=5MB each, jpeg/png/webp                                                              |
+| `DELETE /units/:id/images`           | owner or ADMIN                                  | `{publicId}`                                                                                                               |
 
 ### `/leases`
 
@@ -412,6 +469,18 @@ All routes are prefixed `/api/v1`. Pagination query params (`page`, `limit` max 
 | `PATCH /:id`          | owner or ADMIN                                      | `{startDate?, endDate?, notes?}` — only while `PENDING`, 409 otherwise or on new overlap                                             |
 | `POST /:id/activate`  | owner or ADMIN                                      | 409 if not `PENDING` or unit not `AVAILABLE`; notifies tenant, audited (`LEASE_ACTIVATED`), invalidates unit/dashboard cache         |
 | `POST /:id/terminate` | owner or ADMIN                                      | 409 if not `PENDING`/`ACTIVE`; notifies tenant, audited (`LEASE_TERMINATED`), invalidates cache                                      |
+
+### `/rental-requests`
+
+Responses use `RentalRequestResponseDto`: the request fields plus a `tenant` summary (`id, firstName, lastName, phone`) and a `unit` summary (`id, unitNumber, building, propertyId`). No other user/unit fields are exposed.
+
+| Method & path       | Access                                              | Body / query                                                                                                                                                                                                                                                                                   |
+| ------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /`             | TENANT (own) / OWNER (own properties) / ADMIN (all) | `?status=` + pagination (`sortBy`: `createdAt`, `startDate`, `endDate`); scoping is applied in the query, not in memory                                                                                                                                                                        |
+| `POST /`            | TENANT                                              | `{unitId, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD), message?}` — `tenantId`/`status` in the body -> 400; 400 invalid dates, 404 unit/property not found, 409 unit not `AVAILABLE` or dates overlap a `PENDING`/`ACTIVE` lease; notifies the owner, audited (`RENTAL_REQUEST_CREATED`)      |
+| `GET /:id`          | tenant (own), owner (own properties), or ADMIN      | 403 otherwise, 404 if missing                                                                                                                                                                                                                                                                  |
+| `POST /:id/approve` | owner (own properties) or ADMIN                     | 403 no access, 404 missing, 409 not `PENDING` / unit not `AVAILABLE` / tenant no longer an active `TENANT` / date conflict (including a concurrent lease caught by the DB constraint); creates a `PENDING` lease, unit stays `AVAILABLE`; notifies tenant, audited (`RENTAL_REQUEST_APPROVED`) |
+| `POST /:id/reject`  | owner (own properties) or ADMIN                     | 403 no access, 404 missing, 409 not `PENDING`; no lease created; notifies tenant, audited (`RENTAL_REQUEST_REJECTED`)                                                                                                                                                                          |
 
 ### `/maintenance`
 
@@ -453,10 +522,12 @@ All routes are prefixed `/api/v1`. Pagination query params (`page`, `limit` max 
 
 | Key pattern                             | What                       | TTL | Invalidated by                                                                              |
 | --------------------------------------- | -------------------------- | --- | ------------------------------------------------------------------------------------------- |
-| `units:search:{sha256(scope+query)}`    | `GET /units` result pages  | 60s | any unit create/update/delete/status change; lease activate/terminate/expiration            |
+| `units:search:{sha256(scope+query)}`    | `GET /units` result pages  | 60s | any unit create/update/delete/status/**image** change; lease activate/terminate/expiration  |
 | `dashboard:stats:{admin \| owner:<id>}` | `GET /analytics/dashboard` | 60s | the above, plus property create/update/delete/images, and any maintenance status transition |
 
 TTL is a safety net; invalidation is explicit (`CacheInvalidationService.delByPattern`) — deliberately a full-pattern flush rather than surgical per-key invalidation, to keep it simple.
+
+Rental requests are not cached and do not invalidate anything: creating, approving or rejecting one never changes a unit's status, and the `PENDING` lease an approval creates does not affect unit or dashboard figures until it is activated (which already invalidates the cache).
 
 ## Rate limiting
 
@@ -465,14 +536,14 @@ Global default: 100 requests/minute per IP. Stricter on `/auth/register`, `/logi
 ## Security measures
 
 - Helmet, CORS restricted to `CORS_ORIGINS`, `trust proxy` enabled for correct client IPs behind a reverse proxy.
-- `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })` globally.
+- `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })` globally — this is also what stops a tenant from sending `tenantId` or `status` on a rental request.
 - JWT access/refresh with separate secrets; refresh token rotation + reuse detection; httpOnly refresh cookie.
 - bcrypt password hashing (SHA-256 pre-hashed).
 - OTPs are HMAC-hashed at rest in Redis, single-use, rate-limited, with a lockout after 5 wrong attempts.
 - RBAC (`@Roles`) and resource-level ownership checks on every read/write — the two-layer defense against IDOR.
 - Uploads validated by file content (magic bytes), not filename/MIME type; size- and count-capped.
-- Row-level locking (`SELECT ... FOR UPDATE` via `pessimistic_write`) on every concurrent state transition (lease activation, maintenance transitions).
-- Database-level constraints doing real work: `CHECK`, `EXCLUDE` (via `btree_gist`), partial unique indexes — invariants hold even under concurrent requests or an app bug, not just at the application layer.
+- Row-level locking (`SELECT ... FOR UPDATE` via `pessimistic_write`) on every concurrent state transition (lease activation, rental request approval/rejection, maintenance transitions).
+- Database-level constraints doing real work: `CHECK`, `EXCLUDE` (via `btree_gist`), partial unique indexes — invariants hold even under concurrent requests or an app bug, not just at the application layer. Rental request approval relies on the lease exclusion constraint as its final concurrency guard rather than on application checks alone.
 - Global exception filter normalizes every error, never leaks stack traces or internal messages in production.
 - Rate limiting on brute-forceable endpoints.
 
@@ -499,6 +570,7 @@ src/
     migrations/
       1790376650206-InitSchema.ts   full schema, verified up()/down() on an empty DB
       <timestamp>-AddGoogleAuth.ts   nullable passwordHash + googleId
+      <timestamp>-AddRentalRequests.ts   rental_requests table, new notification/audit enum values
     seeds/
       seed-admin.ts
   common/
@@ -507,7 +579,7 @@ src/
     filters/                        all-exceptions
     interceptors/                   response, logging
     pagination/                     pagination-query.dto, pagination.utils
-    policies/                       policy.utils (canManageProperty, canAccessLease, canAccessMaintenance, canCloseOrCancelMaintenance)
+    policies/                       policy.utils (canManageProperty, canAccessLease, canAccessRentalRequest, canAccessMaintenance, canCloseOrCancelMaintenance)
     redis/                          redis.service, redis.module
     uploads/                        upload.service, upload.constants, image-ref.interface, dto/delete-image.dto
     mail/                           email.service, mail.module, templates/otp.ejs
@@ -531,12 +603,14 @@ src/
     entities/user.entity.ts
     enums/user-role.enum.ts
     dto/                            update-profile, update-user-status, update-user-role,
-                                     list-users-query, user-response
+                                    list-users-query, user-response
+                                    list-user-directory-query, user-directory-response
   properties/
     properties.controller.ts, properties.service.ts, properties.module.ts
     entities/property.entity.ts
     enums/property-type.enum.ts
-    dto/                            create-property, update-property, list-properties-query, property-response
+    dto/                            create-property, update-property, list-properties-query, property-response,
+                                     property-with-units-response
   units/
     units.controller.ts, units.service.ts, units.module.ts
     entities/unit.entity.ts
@@ -547,13 +621,20 @@ src/
     entities/lease.entity.ts
     enums/lease-status.enum.ts
     dto/                            create-lease, update-lease, list-leases-query, lease-response
+    migrations/ ... <timestamp>-AddUnitImages.ts   images column on units
+  rental-requests/
+    rental-requests.controller.ts, rental-requests.service.ts, rental-requests.module.ts
+    rental-requests.service.spec.ts Vitest unit tests (state machine, authorization, conflicts, concurrency error paths)
+    entities/rental-request.entity.ts
+    enums/rental-request-status.enum.ts
+    dto/                            create-rental-request, list-rental-requests-query, rental-request-response
   maintenance/
     maintenance.controller.ts, maintenance.service.ts, maintenance.module.ts
     entities/                       maintenance-request, maintenance-status-history
     enums/                          maintenance-category, maintenance-priority, maintenance-status
     dto/                            create-maintenance-request, assign-maintenance, complete-maintenance,
-                                     transition-notes, list-maintenance-query, maintenance-response,
-                                     maintenance-status-history-response
+                                    transition-notes, list-maintenance-query, maintenance-response,
+                                    maintenance-status-history-response
   notifications/
     notifications.controller.ts, notifications.service.ts, notifications.module.ts
     entities/notification.entity.ts

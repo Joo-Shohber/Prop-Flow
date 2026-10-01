@@ -45,19 +45,22 @@ import { PropertiesService } from './properties.service.js';
 import { DeleteImageDto } from '../common/uploads/dto/delete-image.dto.js';
 import { Req } from '@nestjs/common';
 import type { Request } from 'express';
+import { PropertyWithUnitsResponseDto } from './dto/property-with-units-response.dto.js';
 
 @ApiTags('Properties')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({
   description: 'Missing, invalid or expired access token',
 })
-@Roles(UserRole.OWNER, UserRole.ADMIN)
 @Controller('properties')
 export class PropertiesController {
   constructor(private readonly properties: PropertiesService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List properties (OWNER: own only, ADMIN: all)' })
+  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
+  @ApiOperation({
+    summary: 'List properties (TENANT: all, OWNER: own only, ADMIN: all)',
+  })
   @ApiOkResponse({
     type: PropertyResponseDto,
     isArray: true,
@@ -68,6 +71,7 @@ export class PropertiesController {
   }
 
   @Post()
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({
     summary: 'Create a property (owner = self; ADMIN may set ownerId)',
   })
@@ -81,18 +85,23 @@ export class PropertiesController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a property' })
-  @ApiOkResponse({ type: PropertyResponseDto })
-  @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })
-  @ApiNotFoundResponse({ description: 'Property not found' })
-  findOne(
-    @CurrentUser() actor: User,
-    @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<Property> {
+  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
+  @ApiOperation({
+    summary: 'Get a property',
+  })
+  @ApiOkResponse({ type: PropertyWithUnitsResponseDto })
+  @ApiForbiddenResponse({
+    description: 'Not allowed to access this property',
+  })
+  @ApiNotFoundResponse({
+    description: 'Property not found',
+  })
+  findOne(@CurrentUser() actor: User, @Param('id', ParseUUIDPipe) id: string) {
     return this.properties.findForActor(actor, id);
   }
 
   @Patch(':id')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({ summary: 'Update a property' })
   @ApiOkResponse({ type: PropertyResponseDto })
   @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })
@@ -106,6 +115,7 @@ export class PropertiesController {
   }
 
   @Delete(':id')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Soft delete a property' })
   @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })
@@ -123,6 +133,7 @@ export class PropertiesController {
   }
 
   @Post(':id/images')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({
     summary: `Upload property images (max ${PROPERTY_MAX_IMAGES}, jpeg/png/webp)`,
   })
@@ -155,6 +166,7 @@ export class PropertiesController {
   }
 
   @Delete(':id/images')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({ summary: 'Remove a property image' })
   @ApiOkResponse({ type: PropertyResponseDto })
   @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })

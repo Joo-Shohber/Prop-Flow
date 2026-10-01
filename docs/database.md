@@ -20,17 +20,25 @@ PostgreSQL, accessed exclusively through TypeORM. `synchronize` is `false` in ev
 
 ### `Unit` (`units`)
 
-- `id`, `unitNumber`, `building`, `floor` (nullable), `area` (numeric 10,2), `bedrooms` (smallint), `bathrooms` (smallint), `description` (nullable), `propertyId` (FK -> `properties`, `CASCADE`), `status` (enum, default `AVAILABLE`), `createdAt`, `updatedAt`.
+- `id`, `unitNumber`, `building`, `floor` (nullable), `area` (numeric 10,2), `rentAmount` (numeric 10,2 — the unit's current asking rent), `bedrooms` (smallint), `bathrooms` (smallint), `description` (nullable), `propertyId` (FK -> `properties`, `CASCADE`), `status` (enum, default `AVAILABLE`), `createdAt`, `updatedAt`.
 - Constraint: `UNIQUE (propertyId, building, unitNumber)`.
 - Indexes: `bedrooms`, `propertyId`, `status`.
 
 ### `Lease` (`leases`)
 
-- `id`, `tenantId` (FK -> `users`, `RESTRICT`), `unitId` (FK -> `units`, `RESTRICT`), `startDate`, `endDate` (both `date`), `status` (enum, default `PENDING`), `notes` (nullable), `createdAt`, `updatedAt`.
+- `id`, `tenantId` (FK -> `users`, `RESTRICT`), `unitId` (FK -> `units`, `RESTRICT`), `startDate`, `endDate` (both `date`), `rentAmount` (numeric 10,2 — copied at creation time, not a reference to the unit's current rent), `status` (enum, default `PENDING`), `notes` (nullable), `createdAt`, `updatedAt`.
 - `CHECK ("startDate" < "endDate")`.
-- `EXCLUDE USING gist ("unitId" WITH =, daterange("startDate","endDate",'[]') WITH &&) WHERE (status IN ('PENDING','ACTIVE'))` — requires the `btree_gist` extension; enforces that no two PENDING/ACTIVE leases of the same unit can have overlapping date ranges, at the database level, under concurrent writes.
+- `EXCLUDE USING gist ("unitId" WITH =, daterange("startDate","endDate",'[]') WITH &&) WHERE (status IN ('PENDING','ACTIVE'))` — requires the `btree_gist` extension; enforces that no two PENDING/ACTIVE leases of the same unit can have overlapping date ranges, at the database level, under concurrent writes. This is also the final concurrency guard for rental request approval.
 - Partial unique index: `UNIQUE (unitId) WHERE status = 'ACTIVE'` — at most one active lease per unit.
 - Indexes: `(status, endDate)` composite (used by the lazy-expiration query), `tenantId`, `unitId`, `status`.
+
+### `RentalRequest` (`rental_requests`)
+
+- `id` (uuid PK), `tenantId` (FK -> `users`, `RESTRICT`), `unitId` (FK -> `units`, `RESTRICT`), `startDate`, `endDate` (both `date`), `rentAmount` (numeric 10,2 — snapshot of the unit's rent when the request was made, copied to the lease on approval), `message` (nullable text), `status` (enum `PENDING`/`APPROVED`/`REJECTED`, default `PENDING`), `createdAt`, `updatedAt`.
+- `CHECK ("startDate" < "endDate")`, mirroring `leases`.
+- Indexes: `tenantId`, `unitId`, `status`.
+- There is no direct relation to `properties`: a request reaches its property through `unit -> property`, which is what ownership checks and owner-scoped listings join on.
+- There is intentionally **no** overlap/exclusion constraint and **no** uniqueness constraint on this table. A request does not reserve a unit, so overlapping and duplicate pending requests are allowed; conflicts are resolved at approval time by the `leases` constraints.
 
 ### `MaintenanceRequest` (`maintenance_requests`)
 
@@ -49,45 +57,50 @@ PostgreSQL, accessed exclusively through TypeORM. `synchronize` is `false` in ev
 
 ### `AuditLog` (`audit_logs`)
 
-- `id`, `userId` (FK -> `users`, `RESTRICT` — the acting user), `action` (enum), `entity` (varchar, e.g. `"Property"`), `entityId` (uuid), `metadata` (jsonb, nullable), `ipAddress` (nullable), `createdAt`.
+- `id`, `userId` (FK -> `users`, `RESTRICT` — the acting user), `action` (enum), `entity` (varchar, e.g. `"Property"`, `"RentalRequest"`), `entityId` (uuid), `metadata` (jsonb, nullable), `ipAddress` (nullable), `createdAt`.
 - Indexes: `userId`, `action`, `entity`.
 
 ## Enums
 
-| Enum                  | Values                                                                                                                                                                                                        |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `UserRole`            | `TENANT`, `OWNER`, `MAINTENANCE_STAFF`, `ADMIN`                                                                                                                                                               |
-| `PropertyType`        | `APARTMENT`, `VILLA`, `STUDIO`, `TOWNHOUSE`, `COMMERCIAL`, `OTHER`                                                                                                                                            |
-| `UnitStatus`          | `AVAILABLE`, `RENTED`, `MAINTENANCE`                                                                                                                                                                          |
-| `LeaseStatus`         | `PENDING`, `ACTIVE`, `TERMINATED`, `EXPIRED`                                                                                                                                                                  |
-| `MaintenanceCategory` | `PLUMBING`, `ELECTRICITY`, `HVAC`, `CARPENTRY`, `APPLIANCES`, `OTHER`                                                                                                                                         |
-| `MaintenancePriority` | `LOW`, `MEDIUM`, `HIGH`, `URGENT`                                                                                                                                                                             |
-| `MaintenanceStatus`   | `OPEN`, `ASSIGNED`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`, `CANCELLED`                                                                                                                                          |
-| `NotificationType`    | `LEASE_CREATED`, `LEASE_ACTIVATED`, `LEASE_TERMINATED`, `MAINTENANCE_CREATED`, `MAINTENANCE_ASSIGNED`, `MAINTENANCE_RESOLVED`                                                                                 |
-| `AuditAction`         | `PROPERTY_CREATED`, `PROPERTY_DELETED`, `LEASE_CREATED`, `LEASE_ACTIVATED`, `LEASE_TERMINATED`, `UNIT_STATUS_CHANGED`, `MAINTENANCE_ASSIGNED`, `MAINTENANCE_COMPLETED`, `USER_STATUS_CHANGED`, `ROLE_CHANGED` |
+| Enum                  | Values                                                                                                                                                                                                                                                                                        |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UserRole`            | `TENANT`, `OWNER`, `MAINTENANCE_STAFF`, `ADMIN`                                                                                                                                                                                                                                               |
+| `PropertyType`        | `APARTMENT`, `VILLA`, `STUDIO`, `TOWNHOUSE`, `COMMERCIAL`, `OTHER`                                                                                                                                                                                                                            |
+| `UnitStatus`          | `AVAILABLE`, `RENTED`, `MAINTENANCE`                                                                                                                                                                                                                                                          |
+| `LeaseStatus`         | `PENDING`, `ACTIVE`, `TERMINATED`, `EXPIRED`                                                                                                                                                                                                                                                  |
+| `RentalRequestStatus` | `PENDING`, `APPROVED`, `REJECTED`                                                                                                                                                                                                                                                             |
+| `MaintenanceCategory` | `PLUMBING`, `ELECTRICITY`, `HVAC`, `CARPENTRY`, `APPLIANCES`, `OTHER`                                                                                                                                                                                                                         |
+| `MaintenancePriority` | `LOW`, `MEDIUM`, `HIGH`, `URGENT`                                                                                                                                                                                                                                                             |
+| `MaintenanceStatus`   | `OPEN`, `ASSIGNED`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`, `CANCELLED`                                                                                                                                                                                                                          |
+| `NotificationType`    | `LEASE_CREATED`, `LEASE_ACTIVATED`, `LEASE_TERMINATED`, `MAINTENANCE_CREATED`, `MAINTENANCE_ASSIGNED`, `MAINTENANCE_RESOLVED`, `RENTAL_REQUEST_CREATED`, `RENTAL_REQUEST_APPROVED`, `RENTAL_REQUEST_REJECTED`                                                                                 |
+| `AuditAction`         | `PROPERTY_CREATED`, `PROPERTY_DELETED`, `LEASE_CREATED`, `LEASE_ACTIVATED`, `LEASE_TERMINATED`, `UNIT_STATUS_CHANGED`, `MAINTENANCE_ASSIGNED`, `MAINTENANCE_COMPLETED`, `USER_STATUS_CHANGED`, `ROLE_CHANGED`, `RENTAL_REQUEST_CREATED`, `RENTAL_REQUEST_APPROVED`, `RENTAL_REQUEST_REJECTED` |
 
 ## Cascade / restrict rationale
 
-| Relationship                                                       | Behavior   | Reason                                                                                                  |
-| ------------------------------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------- |
-| `RefreshToken -> User`                                             | `CASCADE`  | A deleted user's sessions are meaningless.                                                              |
-| `Property -> User` (owner)                                         | `CASCADE`  | Consistent with the rest of the schema; in practice users are deactivated, not deleted.                 |
-| `Unit -> Property`                                                 | `CASCADE`  | A unit cannot exist without its property.                                                               |
-| `Notification -> User`                                             | `CASCADE`  | Notifications are disposable per-user data.                                                             |
-| `Lease -> User` (tenant), `Lease -> Unit`                          | `RESTRICT` | Leases are historical/financial records and must not silently disappear if a referenced row is removed. |
-| `MaintenanceRequest -> Unit`, `-> User` (tenant/staff)             | `RESTRICT` | Same rationale — maintenance history is a record, not disposable state.                                 |
-| `MaintenanceStatusHistory -> MaintenanceRequest`                   | `CASCADE`  | History rows have no meaning without their parent request.                                              |
-| `MaintenanceStatusHistory -> User` (changedBy), `AuditLog -> User` | `RESTRICT` | Preserves the identity of who performed a historical action.                                            |
+| Relationship                                                       | Behavior   | Reason                                                                                                     |
+| ------------------------------------------------------------------ | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| `RefreshToken -> User`                                             | `CASCADE`  | A deleted user's sessions are meaningless.                                                                 |
+| `Property -> User` (owner)                                         | `CASCADE`  | Consistent with the rest of the schema; in practice users are deactivated, not deleted.                    |
+| `Unit -> Property`                                                 | `CASCADE`  | A unit cannot exist without its property.                                                                  |
+| `Notification -> User`                                             | `CASCADE`  | Notifications are disposable per-user data.                                                                |
+| `Lease -> User` (tenant), `Lease -> Unit`                          | `RESTRICT` | Leases are historical/financial records and must not silently disappear if a referenced row is removed.    |
+| `RentalRequest -> User` (tenant), `RentalRequest -> Unit`          | `RESTRICT` | Requests are a record of tenant intent and of owner decisions; they must not vanish with a referenced row. |
+| `MaintenanceRequest -> Unit`, `-> User` (tenant/staff)             | `RESTRICT` | Same rationale — maintenance history is a record, not disposable state.                                    |
+| `MaintenanceStatusHistory -> MaintenanceRequest`                   | `CASCADE`  | History rows have no meaning without their parent request.                                                 |
+| `MaintenanceStatusHistory -> User` (changedBy), `AuditLog -> User` | `RESTRICT` | Preserves the identity of who performed a historical action.                                               |
 
-Note that `RESTRICT` here is largely defensive: the application never hard-deletes `User`, `Unit`, or `Lease` rows in practice (users are deactivated, properties are soft-deleted, units/leases are only removed when no dependent records exist) — these constraints exist as a safety net against an application bug, not as an expected code path.
+Note that `RESTRICT` here is largely defensive: the application never hard-deletes `User`, `Unit`, `Lease`, or `RentalRequest` rows in practice (users are deactivated, properties are soft-deleted, units/leases are only removed when no dependent records exist) — these constraints exist as a safety net against an application bug, not as an expected code path. One consequence worth knowing: because `rental_requests.unitId` is `RESTRICT`, a unit that has any rental request (in any status) cannot be hard-deleted via `DELETE /units/:id`; the delete fails with `409` (mapped from foreign key error `23503`).
 
 ## Migrations
 
 - **`InitSchema<timestamp>`** — the full schema in one migration. Its `up()` explicitly creates the `uuid-ossp` and `btree_gist` extensions before creating any table (TypeORM's driver would otherwise attempt this automatically on connect, but the migration makes it explicit rather than relying on that side effect). Verified end-to-end against a genuinely empty database: `up()` succeeds, `down()` fully reverses it (0 tables, 0 enum types remaining), and `up()` was re-run afterward to confirm no residual state. `down()` intentionally does not replay the reverse-order log output verbatim — dropping enum types before the columns that use them fails in PostgreSQL — and instead drops every table with `CASCADE` (leaf tables first) followed by every enum type.
 - **`AddGoogleAuth<timestamp>`** — drops the `NOT NULL` constraint on `passwordHash` and adds the unique, nullable `googleId` column, for Google-only accounts.
 - **`AddPropertyCreatedAuditAction<timestamp>`** — `ALTER TYPE audit_logs_action_enum ADD VALUE 'PROPERTY_CREATED'`. Its `down()` is a documented no-op: PostgreSQL cannot remove a single enum value without recreating the type, and an unused enum value is harmless.
+- **`AddRentalRequests<timestamp>`** — generated with `npm run migration:generate` and reviewed before being run. It creates the `rental_requests` table (with its enum type, foreign keys, indexes and `CHECK` constraint), extends the `notifications.type` and `audit_logs.action` enums with the `RENTAL_REQUEST_*` values, and adds the `rentAmount` column where it does not already exist (`units`, `leases`).
 
 > **Verify:** `AddGoogleAuth` and `AddPropertyCreatedAuditAction` were specified during development as follow-up migrations after `InitSchema`. Confirm both files exist in `src/database/migrations/` and have been applied to every environment; without the latter, inserting an audit row with action `PROPERTY_CREATED` fails with an invalid enum value error.
+>
+> **Verify:** `AddRentalRequests` has not been generated or run at the time of writing. When it is generated, check the SQL before running it: (1) `TypeORM` typically alters an existing PostgreSQL enum by renaming the old type, creating a new one with all values, re-pointing the column with `USING ...::text::new_enum`, and dropping the old type — confirm this is what was produced for `notifications.type` and `audit_logs.action` and that no other table is touched; (2) `leases` must show no dropped or altered constraints (especially the `EXCLUDE` constraint and the partial unique index); (3) a `NOT NULL` `rentAmount` column added to `units` or `leases` needs a default or a backfill if those tables already hold rows, otherwise the migration fails; (4) confirm the exact `rentAmount` type/precision and nullability match the final entities.
 
 ## Entity-relationship diagram
 
@@ -98,6 +111,8 @@ erDiagram
     PROPERTIES ||--o{ UNITS : contains
     UNITS ||--o{ LEASES : has
     USERS ||--o{ LEASES : "rents (tenant)"
+    UNITS ||--o{ RENTAL_REQUESTS : "is requested in"
+    USERS ||--o{ RENTAL_REQUESTS : "submits (tenant)"
     UNITS ||--o{ MAINTENANCE_REQUESTS : has
     USERS ||--o{ MAINTENANCE_REQUESTS : "reports / is assigned"
     MAINTENANCE_REQUESTS ||--o{ MAINTENANCE_STATUS_HISTORY : logs
@@ -135,6 +150,7 @@ erDiagram
         varchar unitNumber
         varchar building
         numeric area
+        numeric rentAmount
         varchar status
     }
     LEASES {
@@ -143,6 +159,17 @@ erDiagram
         uuid tenantId FK
         date startDate
         date endDate
+        numeric rentAmount
+        varchar status
+    }
+    RENTAL_REQUESTS {
+        uuid id PK
+        uuid unitId FK
+        uuid tenantId FK
+        date startDate
+        date endDate
+        numeric rentAmount
+        text message "nullable"
         varchar status
     }
     MAINTENANCE_REQUESTS {

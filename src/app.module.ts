@@ -20,6 +20,7 @@ import { NotificationsModule } from './notifications/notifications.module.js';
 import { AnalyticsModule } from './analytics/analytics.module.js';
 import { CacheInvalidationModule } from './common/cache/cache-invalidation.module.js';
 import { RateLimitModule } from './common/throttler/rate-limit.module.js';
+import { RentalRequestsModule } from './rental-requests/rental-requests.module.js';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { RateLimitModule } from './common/throttler/rate-limit.module.js';
     PropertiesModule,
     UnitsModule,
     LeasesModule,
+    RentalRequestsModule,
     MaintenanceModule,
     NotificationsModule,
     AuditLogsModule,

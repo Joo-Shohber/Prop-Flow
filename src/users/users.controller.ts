@@ -37,6 +37,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import { MAX_IMAGE_SIZE_BYTES } from '../common/uploads/upload.constants.js';
+import { ListUserDirectoryQueryDto } from './dto/list-user-directory-query.dto.js';
+import { UserDirectoryResponseDto } from './dto/user-directory-response.dto.js';
 
 @ApiTags('Users')
 @ApiBearerAuth()
@@ -141,5 +143,20 @@ export class UsersController {
     @Req() req: Request,
   ): Promise<User> {
     return this.users.setRole(id, dto.role, actor, req.ip);
+  }
+
+  @Get('directory')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @ApiOperation({
+    summary:
+      'Search active TENANT or MAINTENANCE_STAFF users, for creating a lease or assigning maintenance',
+  })
+  @ApiOkResponse({
+    type: UserDirectoryResponseDto,
+    isArray: true,
+    description: 'Paginated list; see `meta`',
+  })
+  findDirectory(@Query() query: ListUserDirectoryQueryDto) {
+    return this.users.findDirectory(query);
   }
 }

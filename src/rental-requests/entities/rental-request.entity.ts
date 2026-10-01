@@ -3,7 +3,6 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  Exclusion,
   Index,
   JoinColumn,
   ManyToOne,
@@ -12,18 +11,11 @@ import {
 } from 'typeorm';
 import { Unit } from '../../units/entities/unit.entity.js';
 import { User } from '../../users/entities/user.entity.js';
-import { LeaseStatus } from '../enums/lease-status.enum.js';
+import { RentalRequestStatus } from '../enums/rental-request-status.enum.js';
 
-@Entity('leases')
+@Entity('rental_requests')
 @Check(`"startDate" < "endDate"`)
-@Exclusion(
-  `USING gist ("unitId" WITH =, daterange("startDate", "endDate", '[]') WITH &&)
-  WHERE (status IN ('PENDING', 'ACTIVE'))`,
-)
-// At most one ACTIVE lease per unit at any time.
-@Index(['unitId'], { unique: true, where: `status = 'ACTIVE'` })
-@Index(['status', 'endDate'])
-export class Lease {
+export class RentalRequest {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -49,15 +41,19 @@ export class Lease {
   @Column({ type: 'date' })
   endDate: string;
 
+  @Column({ type: 'text', nullable: true })
+  message: string | null;
+
   @Index()
-  @Column({ type: 'enum', enum: LeaseStatus, default: LeaseStatus.PENDING })
-  status: LeaseStatus;
+  @Column({
+    type: 'enum',
+    enum: RentalRequestStatus,
+    default: RentalRequestStatus.PENDING,
+  })
+  status: RentalRequestStatus;
 
   @Column({ type: 'integer' })
   rentAmount: number;
-
-  @Column({ type: 'text', nullable: true })
-  notes: string | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

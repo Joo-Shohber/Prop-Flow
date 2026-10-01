@@ -254,6 +254,39 @@ export class MaintenanceController {
     return this.maintenance.getHistory(actor, id);
   }
 
+  @Post(':id/images')
+  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
+  @ApiOperation({
+    summary: `Add more request images while OPEN (max ${MAINTENANCE_MAX_IMAGES} total)`,
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        images: { type: 'array', items: { type: 'string', format: 'binary' } },
+      },
+    },
+  })
+  @ApiOkResponse({ type: MaintenanceResponseDto })
+  @ApiForbiddenResponse({ description: 'No access to this request' })
+  @ApiConflictResponse({
+    description: 'Not OPEN, or would exceed the image limit',
+  })
+  @UseInterceptors(
+    FilesInterceptor('images', MAINTENANCE_MAX_IMAGES, {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
+    }),
+  )
+  addImages(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFiles() files: Express.Multer.File[],
+  ): Promise<MaintenanceRequest> {
+    return this.maintenance.addImages(actor, id, files);
+  }
+
   @Delete(':id/images')
   @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({ summary: 'Remove a request image (only while OPEN)' })

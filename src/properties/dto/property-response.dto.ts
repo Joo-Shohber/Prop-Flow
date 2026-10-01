@@ -4,6 +4,7 @@ import { PropertyType } from '../enums/property-type.enum.js';
 class ImageRefDto {
   @ApiProperty() url: string;
   @ApiProperty() publicId: string;
+  @ApiProperty() source: string;
 }
 
 export class PropertyResponseDto {

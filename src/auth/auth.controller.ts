@@ -98,6 +98,21 @@ export class AuthController {
     return body;
   }
 
+  // @Get('google/callback')
+  // @UseGuards(GoogleAuthGuard)
+  // @ApiOperation({
+  //   summary:
+  //     'Google OAuth callback — redirects to the frontend with the session cookie set',
+  // })
+  // async googleCallback(
+  //   @Req() req: Request & { user: GoogleProfile },
+  //   @Res() res: Response, // لاحظ: من غير passthrough، إحنا متحكمين في الـ response بالكامل
+  // ): Promise<void> {
+  //   const { refreshToken } = await this.authService.loginWithGoogle(req.user);
+  //   setRefreshTokenCookie(res, refreshToken, this.config);
+  //   res.redirect(this.config.getOrThrow<string>('FRONTEND_URL'));
+  // }
+
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

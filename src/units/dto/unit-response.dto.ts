@@ -1,6 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UnitStatus } from '../enums/unit-status.enum.js';
 
+class ImageRefDto {
+  @ApiProperty() url: string;
+
+  @ApiProperty() publicId: string;
+
+  @ApiProperty() source: string;
+}
+
 export class UnitResponseDto {
   @ApiProperty() id: string;
 
@@ -16,11 +24,15 @@ export class UnitResponseDto {
 
   @ApiProperty() bathrooms: number;
 
+  @ApiProperty() rentAmount: number;
+
   @ApiProperty({ nullable: true, type: String }) description: string | null;
 
   @ApiProperty() propertyId: string;
 
   @ApiProperty({ enum: UnitStatus }) status: UnitStatus;
+
+  @ApiProperty({ type: [ImageRefDto] }) images: ImageRefDto[];
 
   @ApiProperty() createdAt: Date;
 

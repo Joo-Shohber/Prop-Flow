@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -28,6 +29,8 @@ import { createHash } from 'node:crypto';
 import { CacheInvalidationService } from '../common/cache/cache-invalidation.service.js';
 import { UNITS_SEARCH_CACHE_TTL_SECONDS } from '../common/cache/cache.constants.js';
 import { RedisService } from '../common/redis/redis.service.js';
+import { UploadService } from '../common/uploads/upload.service.js';
+import { UNIT_MAX_IMAGES } from '../common/uploads/upload.constants.js';
 
 const UNIT_SORT_FIELDS = [
   'createdAt',
@@ -48,7 +51,8 @@ export class UnitsService {
     private readonly unitRepo: Repository<Unit>,
     private readonly propertiesService: PropertiesService,
     private readonly leaseExpiration: LeaseExpirationService,
-    readonly auditLogsService: AuditLogsService,
+    private readonly auditLogsService: AuditLogsService,
+    private readonly uploads: UploadService,
     private readonly redis: RedisService,
     private readonly cache: CacheInvalidationService,
     private readonly dataSource: DataSource,
@@ -80,9 +84,19 @@ export class UnitsService {
    */
   async findForActor(actor: User, id: string): Promise<Unit> {
     const unit = await this.findOne(id);
+
+    if (actor.role === UserRole.TENANT) {
+      if (unit.status !== UnitStatus.AVAILABLE) {
+        throw new NotFoundException('Unit not found');
+      }
+
+      return unit;
+    }
+
     if (!canManageProperty(actor, unit.property)) {
       throw new ForbiddenException('You do not have access to this unit');
     }
+
     return unit;
   }
 
@@ -107,23 +121,33 @@ export class UnitsService {
       UNIT_SORT_FIELDS,
       'createdAt',
     );
-
     const queryBuilder = this.unitRepo
       .createQueryBuilder('unit')
       .innerJoin('unit.property', 'property');
 
-    if (actor.role !== UserRole.ADMIN) {
-      queryBuilder.andWhere('property.ownerId = :ownerId', {
-        ownerId: actor.id,
+    if (actor.role === UserRole.TENANT) {
+      // Tenants only ever browse what's actually rentable — never RENTED/MAINTENANCE
+      // units, and never scoped to a particular owner.
+      queryBuilder.andWhere('unit.status = :status', {
+        status: UnitStatus.AVAILABLE,
       });
+    } else {
+      if (actor.role !== UserRole.ADMIN) {
+        queryBuilder.andWhere('property.ownerId = :ownerId', {
+          ownerId: actor.id,
+        });
+      }
+      if (query.status)
+        queryBuilder.andWhere('unit.status = :status', {
+          status: query.status,
+        });
     }
+
     if (query.propertyId) {
       queryBuilder.andWhere('unit.propertyId = :propertyId', {
         propertyId: query.propertyId,
       });
     }
-    if (query.status)
-      queryBuilder.andWhere('unit.status = :status', { status: query.status });
     if (query.bedrooms !== undefined) {
       queryBuilder.andWhere('unit.bedrooms = :bedrooms', {
         bedrooms: query.bedrooms,
@@ -137,6 +161,16 @@ export class UnitsService {
       queryBuilder.andWhere('unit.area <= :maxArea', {
         maxArea: query.maxArea,
       });
+    if (query.minPrice !== undefined) {
+      queryBuilder.andWhere('unit.rentAmount >= :minPrice', {
+        minPrice: query.minPrice,
+      });
+    }
+    if (query.maxPrice !== undefined) {
+      queryBuilder.andWhere('unit.rentAmount <= :maxPrice', {
+        maxPrice: query.maxPrice,
+      });
+    }
 
     const [data, total] = await queryBuilder
       .orderBy(`unit.${sortBy}`, sortOrder)
@@ -260,15 +294,62 @@ export class UnitsService {
     return saved;
   }
 
+  async addImages(
+    actor: User,
+    id: string,
+    files: Express.Multer.File[],
+  ): Promise<Unit> {
+    const unit = await this.findForActor(actor, id);
+    if (unit.images.length + files.length > UNIT_MAX_IMAGES) {
+      throw new ConflictException(
+        `A unit can have at most ${UNIT_MAX_IMAGES} images`,
+      );
+    }
+
+    const uploaded = await this.uploads.uploadImages(
+      files,
+      'propflow/units',
+      UNIT_MAX_IMAGES,
+    );
+    unit.images = [...unit.images, ...uploaded];
+    const saved = await this.unitRepo.save(unit);
+    await this.cache.invalidateUnitsAndDashboard();
+    return saved;
+  }
+
+  async removeImage(actor: User, id: string, publicId: string): Promise<Unit> {
+    const unit = await this.findForActor(actor, id);
+    const image = unit.images.find((img) => img.publicId === publicId);
+    if (!image) throw new NotFoundException('Image not found on this unit');
+
+    await this.uploads.deleteImages([image]);
+    unit.images = unit.images.filter((img) => img.publicId !== publicId);
+    const saved = await this.unitRepo.save(unit);
+    await this.cache.invalidateUnitsAndDashboard();
+    return saved;
+  }
+
   private buildSearchCacheKey(actor: User, query: ListUnitsQueryDto): string {
-    const scope = actor.role === UserRole.ADMIN ? 'admin' : actor.id;
+    // Every tenant sees the exact same AVAILABLE-only view for a given query,
+    // so they share one cache bucket instead of one per tenant id.
+    const scope =
+      actor.role === UserRole.ADMIN
+        ? 'admin'
+        : actor.role === UserRole.TENANT
+          ? 'tenant'
+          : actor.id;
     const canonical = {
       scope,
-      status: query.status ?? null,
+      status:
+        actor.role === UserRole.TENANT
+          ? UnitStatus.AVAILABLE
+          : (query.status ?? null),
       propertyId: query.propertyId ?? null,
       bedrooms: query.bedrooms ?? null,
       minArea: query.minArea ?? null,
       maxArea: query.maxArea ?? null,
+      minPrice: query.minPrice ?? null,
+      maxPrice: query.maxPrice ?? null,
       page: query.page,
       limit: query.limit,
       sortBy: query.sortBy ?? null,

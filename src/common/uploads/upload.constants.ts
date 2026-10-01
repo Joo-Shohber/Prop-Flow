@@ -6,3 +6,4 @@ export const ALLOWED_IMAGE_MIME_TYPES = [
 export const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 export const PROPERTY_MAX_IMAGES = 10;
 export const MAINTENANCE_MAX_IMAGES = 5;
+export const UNIT_MAX_IMAGES = 10;

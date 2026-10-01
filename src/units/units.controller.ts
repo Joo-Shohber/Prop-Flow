@@ -10,10 +10,16 @@ import {
   Patch,
   Post,
   Query,
+  Req,
+  UploadedFiles,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiBody,
+  ApiConflictResponse,
+  ApiConsumes,
   ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiNotFoundResponse,
@@ -22,6 +28,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { Roles } from '../common/decorators/roles.decorator.js';
 import { User } from '../users/entities/user.entity.js';
@@ -33,22 +40,27 @@ import { UpdateUnitDto } from './dto/update-unit.dto.js';
 import { UpdateUnitStatusDto } from './dto/update-unit-status.dto.js';
 import { Unit } from './entities/unit.entity.js';
 import { UnitsService } from './units.service.js';
-import { Req } from '@nestjs/common';
-import type { Request } from 'express';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { DeleteImageDto } from '../common/uploads/dto/delete-image.dto.js';
+import {
+  MAX_IMAGE_SIZE_BYTES,
+  UNIT_MAX_IMAGES,
+} from '../common/uploads/upload.constants.js';
 
 @ApiTags('Units')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({
   description: 'Missing, invalid or expired access token',
 })
-@Roles(UserRole.OWNER, UserRole.ADMIN)
 @Controller()
 export class UnitsController {
   constructor(private readonly unitsService: UnitsService) {}
 
   @Get('units')
+  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({
-    summary: 'List units (OWNER: own properties only, ADMIN: all)',
+    summary: 'List units (TENANT: AVAILABLE only, OWNER: own, ADMIN: all)',
   })
   @ApiOkResponse({
     type: UnitResponseDto,
@@ -60,6 +72,7 @@ export class UnitsController {
   }
 
   @Post('properties/:propertyId/units')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({ summary: 'Create a unit under a property' })
   @ApiCreatedResponse({ type: UnitResponseDto })
   @ApiForbiddenResponse({
@@ -75,7 +88,11 @@ export class UnitsController {
   }
 
   @Get('units/:id')
-  @ApiOperation({ summary: 'Get a unit' })
+  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
+  @ApiOperation({
+    summary:
+      'Get a unit (TENANT: AVAILABLE units only, OWNER: own properties, ADMIN: all)',
+  })
   @ApiOkResponse({ type: UnitResponseDto })
   @ApiForbiddenResponse({ description: 'No access to this unit' })
   @ApiNotFoundResponse({ description: 'Unit not found' })
@@ -87,6 +104,7 @@ export class UnitsController {
   }
 
   @Patch('units/:id')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({ summary: 'Update a unit (not its status)' })
   @ApiOkResponse({ type: UnitResponseDto })
   @ApiForbiddenResponse({ description: 'No access to this unit' })
@@ -100,6 +118,7 @@ export class UnitsController {
   }
 
   @Delete('units/:id')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete a unit' })
   @ApiForbiddenResponse({ description: 'No access to this unit' })
@@ -113,6 +132,7 @@ export class UnitsController {
   }
 
   @Patch('units/:id/status')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiOperation({ summary: 'Manually toggle AVAILABLE <-> MAINTENANCE' })
   @ApiOkResponse({ type: UnitResponseDto })
   @ApiForbiddenResponse({ description: 'No access to this unit' })
@@ -124,5 +144,48 @@ export class UnitsController {
     @Req() req: Request,
   ): Promise<Unit> {
     return this.unitsService.setStatus(actor, id, dto.status, req.ip);
+  }
+
+  @Post('units/:id/images')
+  @ApiOperation({
+    summary: `Upload unit images (max ${UNIT_MAX_IMAGES}, jpeg/png/webp)`,
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        images: { type: 'array', items: { type: 'string', format: 'binary' } },
+      },
+    },
+  })
+  @ApiOkResponse({ type: UnitResponseDto })
+  @ApiForbiddenResponse({ description: 'No access to this unit' })
+  @ApiConflictResponse({ description: 'Would exceed the per-unit image limit' })
+  @UseInterceptors(
+    FilesInterceptor('images', UNIT_MAX_IMAGES, {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_IMAGE_SIZE_BYTES },
+    }),
+  )
+  addImages(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFiles() files: Express.Multer.File[],
+  ): Promise<Unit> {
+    return this.unitsService.addImages(actor, id, files);
+  }
+
+  @Delete('units/:id/images')
+  @ApiOperation({ summary: 'Remove a unit image' })
+  @ApiOkResponse({ type: UnitResponseDto })
+  @ApiForbiddenResponse({ description: 'No access to this unit' })
+  @ApiNotFoundResponse({ description: 'Unit or image not found' })
+  removeImage(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DeleteImageDto,
+  ): Promise<Unit> {
+    return this.unitsService.removeImage(actor, id, dto.publicId);
   }
 }

@@ -16,6 +16,8 @@ export class LeaseResponseDto {
 
   @ApiProperty({ nullable: true, type: String }) notes: string | null;
 
+  @ApiProperty() rentAmount: number;
+
   @ApiProperty() createdAt: Date;
 
   @ApiProperty() updatedAt: Date;
