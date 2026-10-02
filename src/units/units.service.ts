@@ -69,7 +69,7 @@ export class UnitsService {
       where: { id },
       relations: { property: true },
     });
-    if (!unit) throw new NotFoundException('Unit not found');
+    if (!unit?.property) throw new NotFoundException('Unit not found');
     return unit;
   }
 
@@ -123,11 +123,10 @@ export class UnitsService {
     );
     const queryBuilder = this.unitRepo
       .createQueryBuilder('unit')
-      .innerJoin('unit.property', 'property');
+      .innerJoin('unit.property', 'property')
+      .andWhere('property."deletedAt" IS NULL');
 
     if (actor.role === UserRole.TENANT) {
-      // Tenants only ever browse what's actually rentable — never RENTED/MAINTENANCE
-      // units, and never scoped to a particular owner.
       queryBuilder.andWhere('unit.status = :status', {
         status: UnitStatus.AVAILABLE,
       });

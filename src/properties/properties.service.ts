@@ -194,7 +194,7 @@ export class PropertiesService {
     const property = await this.findForActor(actor, id);
     this.propertyRepo.merge(property, dto);
     const saved = await this.propertyRepo.save(property);
-    await this.cache.invalidateDashboard();
+    await this.cache.invalidateUnitsAndDashboard();
     return saved;
   }
 
@@ -227,7 +227,7 @@ export class PropertiesService {
       });
     });
 
-    await this.cache.invalidateDashboard();
+    await this.cache.invalidateUnitsAndDashboard();
   }
 
   /**

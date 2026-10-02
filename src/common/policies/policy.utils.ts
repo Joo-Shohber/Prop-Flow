@@ -14,13 +14,17 @@ export const canManageProperty = (
   resource: { ownerId: string },
 ): boolean => isAdmin(user) || resource.ownerId === user.id;
 
+// property is null when it has been soft-deleted
 export const canAccessLease = (
   user: Pick<User, 'id' | 'role'>,
-  lease: { tenantId: string; unit: { property: { ownerId: string } } },
+  lease: {
+    tenantId: string;
+    unit: { property: { ownerId: string } | null };
+  },
 ): boolean => {
   if (isAdmin(user)) return true;
   if (user.role === UserRole.TENANT) return lease.tenantId === user.id;
-  return lease.unit.property.ownerId === user.id;
+  return lease.unit.property?.ownerId === user.id;
 };
 
 export const canAccessMaintenance = (
@@ -28,29 +32,35 @@ export const canAccessMaintenance = (
   request: {
     tenantId: string;
     assignedStaffId: string | null;
-    unit: { property: { ownerId: string } };
+    unit: { property: { ownerId: string } | null };
   },
 ): boolean => {
   if (isAdmin(user)) return true;
   if (user.role === UserRole.TENANT) return request.tenantId === user.id;
   if (user.role === UserRole.MAINTENANCE_STAFF)
     return request.assignedStaffId === user.id;
-  return request.unit.property.ownerId === user.id;
+  return request.unit.property?.ownerId === user.id;
 };
 
 export const canCloseOrCancelMaintenance = (
   user: Pick<User, 'id' | 'role'>,
-  request: { tenantId: string; unit: { property: { ownerId: string } } },
+  request: {
+    tenantId: string;
+    unit: { property: { ownerId: string } | null };
+  },
 ): boolean =>
   isAdmin(user) ||
   request.tenantId === user.id ||
-  request.unit.property.ownerId === user.id;
+  request.unit.property?.ownerId === user.id;
 
 export const canAccessRentalRequest = (
   user: Pick<User, 'id' | 'role'>,
-  request: { tenantId: string; unit: { property: { ownerId: string } } },
+  request: {
+    tenantId: string;
+    unit: { property: { ownerId: string } | null };
+  },
 ): boolean => {
   if (isAdmin(user)) return true;
   if (user.role === UserRole.TENANT) return request.tenantId === user.id;
-  return request.unit.property.ownerId === user.id;
+  return request.unit.property?.ownerId === user.id;
 };

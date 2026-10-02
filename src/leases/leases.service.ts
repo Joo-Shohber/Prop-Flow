@@ -109,12 +109,11 @@ export class LeasesService {
       queryBuilder.andWhere('lease.tenantId = :selfId', { selfId: actor.id });
     } else if (actor.role === UserRole.OWNER) {
       queryBuilder.andWhere(
-        'unit.propertyId IN (SELECT id FROM properties WHERE "ownerId" = :ownerId)',
-        {
-          ownerId: actor.id,
-        },
+        'unit.propertyId IN (SELECT id FROM properties WHERE "ownerId" = :ownerId AND "deletedAt" IS NULL)',
+        { ownerId: actor.id },
       );
     }
+
     if (query.status)
       queryBuilder.andWhere('lease.status = :status', { status: query.status });
     if (query.unitId)
@@ -239,10 +238,11 @@ export class LeasesService {
    * Activates a pending lease and marks its unit as rented.
    * The operation runs inside a database transaction and uses pessimistic
    * locking to prevent concurrent modifications to the lease and unit.
+   * The cache is invalidated only after the transaction has committed.
    * @param actor - The user activating the lease.
    * @param id - The unique identifier of the lease.
    * @returns The activated lease.
-   * @throws NotFoundException If the lease or unit does not exist.
+   * @throws NotFoundException If the lease, unit or property does not exist.
    * @throws ForbiddenException If the actor cannot manage the property.
    * @throws ConflictException If the lease is not PENDING or the unit
    * is not AVAILABLE.
@@ -250,7 +250,7 @@ export class LeasesService {
   async activate(actor: User, id: string, ip?: string): Promise<Lease> {
     await this.leaseExpiration.run();
 
-    return this.dataSource.transaction(async (manager) => {
+    const activated = await this.dataSource.transaction(async (manager) => {
       const lease = await manager
         .createQueryBuilder(Lease, 'lease')
         .setLock('pessimistic_write')
@@ -263,6 +263,7 @@ export class LeasesService {
         relations: { property: true },
       });
       if (!unit) throw new NotFoundException('Unit not found');
+      if (!unit.property) throw new NotFoundException('Property not found');
       if (!canManageProperty(actor, unit.property)) {
         throw new ForbiddenException('You do not have access to this lease');
       }
@@ -301,26 +302,29 @@ export class LeasesService {
         ipAddress: ip,
       });
 
-      await this.cache.invalidateUnitsAndDashboard();
       return lease;
     });
+
+    await this.cache.invalidateUnitsAndDashboard();
+    return activated;
   }
 
   /**
    * Terminates a pending or active lease.
    * The operation runs inside a database transaction. If the lease was
    * active, its unit is returned to AVAILABLE status.
+   * The cache is invalidated only after the transaction has committed.
    * @param actor - The user terminating the lease.
    * @param id - The unique identifier of the lease.
    * @returns The terminated lease.
-   * @throws NotFoundException If the lease or unit does not exist.
+   * @throws NotFoundException If the lease, unit or property does not exist.
    * @throws ForbiddenException If the actor cannot manage the property.
    * @throws ConflictException If the lease is not PENDING or ACTIVE.
    */
   async terminate(actor: User, id: string, ip?: string): Promise<Lease> {
     await this.leaseExpiration.run();
 
-    return this.dataSource.transaction(async (manager) => {
+    const terminated = await this.dataSource.transaction(async (manager) => {
       const lease = await manager
         .createQueryBuilder(Lease, 'lease')
         .setLock('pessimistic_write')
@@ -333,6 +337,7 @@ export class LeasesService {
         relations: { property: true },
       });
       if (!unit) throw new NotFoundException('Unit not found');
+      if (!unit.property) throw new NotFoundException('Property not found');
       if (!canManageProperty(actor, unit.property)) {
         throw new ForbiddenException('You do not have access to this lease');
       }
@@ -369,8 +374,10 @@ export class LeasesService {
         ipAddress: ip,
       });
 
-      await this.cache.invalidateUnitsAndDashboard();
       return lease;
     });
+
+    await this.cache.invalidateUnitsAndDashboard();
+    return terminated;
   }
 }

@@ -116,10 +116,8 @@ export class MaintenanceService {
       });
     } else if (actor.role === UserRole.OWNER) {
       queryBuilder.andWhere(
-        'unit.propertyId IN (SELECT id FROM properties WHERE "ownerId" = :ownerId)',
-        {
-          ownerId: actor.id,
-        },
+        'unit.propertyId IN (SELECT id FROM properties WHERE "ownerId" = :ownerId AND "deletedAt" IS NULL)',
+        { ownerId: actor.id },
       );
     } else if (actor.role === UserRole.MAINTENANCE_STAFF) {
       queryBuilder.andWhere('request.assignedStaffId = :staffId', {
@@ -153,6 +151,7 @@ export class MaintenanceService {
 
   /**
    * Creates a new maintenance request for the authenticated tenant.
+   * The dashboard cache is invalidated only after the transaction commits.
    * @param actor - Authenticated tenant creating the request.
    * @param dto - Maintenance request data.
    * @param files - Optional maintenance images.
@@ -175,7 +174,7 @@ export class MaintenanceService {
         )
       : [];
 
-    return this.dataSource.transaction(async (manager) => {
+    const created = await this.dataSource.transaction(async (manager) => {
       const unit = await this.loadUnit(manager, lease.unitId);
 
       const maintenance = manager.create(MaintenanceRequest, {
@@ -198,6 +197,9 @@ export class MaintenanceService {
 
       return saved;
     });
+
+    await this.cache.invalidateDashboard();
+    return created;
   }
 
   /**
@@ -230,7 +232,7 @@ export class MaintenanceService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const assigned = await this.dataSource.transaction(async (manager) => {
       const request = await this.lock(manager, id);
       const unit = await this.loadUnit(manager, request.unitId);
       if (!canManageProperty(actor, unit.property)) {
@@ -283,9 +285,11 @@ export class MaintenanceService {
         ipAddress: ip,
       });
 
-      await this.cache.invalidateDashboard();
       return request;
     });
+
+    await this.cache.invalidateDashboard();
+    return assigned;
   }
 
   /**
@@ -303,7 +307,7 @@ export class MaintenanceService {
     id: string,
     dto: TransitionNotesDto,
   ): Promise<MaintenanceRequest> {
-    return this.dataSource.transaction(async (manager) => {
+    const started = await this.dataSource.transaction(async (manager) => {
       const request = await this.lock(manager, id);
 
       if (request.assignedStaffId !== actor.id) {
@@ -331,9 +335,11 @@ export class MaintenanceService {
         dto.notes,
       );
 
-      await this.cache.invalidateDashboard();
       return request;
     });
+
+    await this.cache.invalidateDashboard();
+    return started;
   }
 
   /**
@@ -363,7 +369,7 @@ export class MaintenanceService {
         )
       : [];
 
-    return this.dataSource.transaction(async (manager) => {
+    const completed = await this.dataSource.transaction(async (manager) => {
       const request = await this.lock(manager, id);
       if (request.assignedStaffId !== actor.id) {
         throw new ForbiddenException(
@@ -418,9 +424,11 @@ export class MaintenanceService {
         ipAddress: ip,
       });
 
-      await this.cache.invalidateDashboard();
       return request;
     });
+
+    await this.cache.invalidateDashboard();
+    return completed;
   }
 
   /**
@@ -438,7 +446,7 @@ export class MaintenanceService {
     id: string,
     dto: TransitionNotesDto,
   ): Promise<MaintenanceRequest> {
-    return this.dataSource.transaction(async (manager) => {
+    const closed = await this.dataSource.transaction(async (manager) => {
       const request = await this.lock(manager, id);
       const unit = await this.loadUnit(manager, request.unitId);
 
@@ -472,9 +480,11 @@ export class MaintenanceService {
         dto.notes,
       );
 
-      await this.cache.invalidateDashboard();
       return request;
     });
+
+    await this.cache.invalidateDashboard();
+    return closed;
   }
 
   /**
@@ -493,7 +503,7 @@ export class MaintenanceService {
     id: string,
     dto: TransitionNotesDto,
   ): Promise<MaintenanceRequest> {
-    return this.dataSource.transaction(async (manager) => {
+    const cancelled = await this.dataSource.transaction(async (manager) => {
       const request = await this.lock(manager, id);
       const unit = await this.loadUnit(manager, request.unitId);
 
@@ -532,9 +542,11 @@ export class MaintenanceService {
         dto.notes,
       );
 
-      await this.cache.invalidateDashboard();
       return request;
     });
+
+    await this.cache.invalidateDashboard();
+    return cancelled;
   }
 
   /**
@@ -717,6 +729,7 @@ export class MaintenanceService {
     });
 
     if (!unit) throw new NotFoundException('Unit not found');
+    if (!unit.property) throw new NotFoundException('Property not found');
 
     return unit;
   }

@@ -53,10 +53,8 @@ export class RentalRequestsService {
   constructor(
     @InjectRepository(RentalRequest)
     private readonly requestRepo: Repository<RentalRequest>,
-
     @InjectRepository(Unit)
     private readonly unitRepo: Repository<Unit>,
-
     private readonly leaseExpiration: LeaseExpirationService,
     private readonly notifications: NotificationsService,
     private readonly auditLogs: AuditLogsService,
@@ -130,7 +128,7 @@ export class RentalRequestsService {
       .createQueryBuilder('request')
       .innerJoinAndSelect('request.tenant', 'tenant')
       .innerJoinAndSelect('request.unit', 'unit')
-      .innerJoin('unit.property', 'property');
+      .innerJoin('unit.property', 'property', 'property.deletedAt IS NULL');
 
     if (actor.role === UserRole.TENANT) {
       queryBuilder.andWhere('request.tenantId = :selfId', {
@@ -145,6 +143,12 @@ export class RentalRequestsService {
     if (query.status) {
       queryBuilder.andWhere('request.status = :status', {
         status: query.status,
+      });
+    }
+
+    if (query.unitId) {
+      queryBuilder.andWhere('request.unitId = :unitId', {
+        unitId: query.unitId,
       });
     }
 
@@ -193,7 +197,7 @@ export class RentalRequestsService {
       },
     });
 
-    if (!unit?.property) {
+    if (!unit?.property || unit.property.deletedAt) {
       throw new NotFoundException('Unit not found');
     }
 
@@ -224,7 +228,6 @@ export class RentalRequestsService {
         status: RentalRequestStatus.PENDING,
         rentAmount: unit.rentAmount,
       });
-
       await manager.save(request);
 
       await this.notifications.create(manager, {
