@@ -397,8 +397,6 @@ Requires: Node >= 22.12, PostgreSQL (with privileges to `CREATE EXTENSION`), Red
 | `migration:revert`             | rolls back the last migration                                   |
 | `seed:admin`                   | creates the ADMIN from `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD` |
 
-No `test` script runs any real suite — see "Testing" in `docs/testing.md`.
-
 ## Common infrastructure
 
 - **`RedisService`** — `getJson`/`setJson` (TTL), `del`, `delByPattern` (SCAN-based).
