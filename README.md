@@ -420,7 +420,7 @@ All routes are prefixed `/api/v1`. Pagination query params (`page`, `limit` max 
 
 | Method & path                   | Body / notes                                                                 | Success                                                  | Errors                          |
 | ------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------- |
-| `POST /register`                | `{email, password(8-128), firstName, lastName, phone?, role: TENANT\|OWNER}` | 201, user (no password)                                  | 400, 409 duplicate email        |
+| `POST /register`                | `{email, password(8-128), firstName, lastName, phone?, role: TENANT\|OWNER}` | 201, created user message                                | 400, 409 duplicate email        |
 | `POST /login`                   | `{email, password}`                                                          | 200 `{accessToken, expiresIn, user}` + refresh cookie    | 401, 403 deactivated/unverified |
 | `POST /refresh`                 | cookie only                                                                  | 200 `{accessToken, expiresIn}` + rotated cookie          | 401 missing/invalid/reused      |
 | `POST /logout`                  | cookie if present                                                            | 200 always, clears cookie                                | —                               |
