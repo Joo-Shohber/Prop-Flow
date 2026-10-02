@@ -27,7 +27,6 @@ import { UsersService } from '../users/users.service.js';
 import { User } from '../users/entities/user.entity.js';
 import { PasswordService } from './password.service.js';
 import { GoogleProfile } from './google.service.js';
-import { waitUntil } from '@vercel/functions';
 
 const INVALID_OTP_MESSAGE = 'Invalid or expired verification code';
 const OTP_SEND_MESSAGE =
@@ -308,7 +307,7 @@ export class AuthService {
 
   private async sendOtp(email: string, purpose: OtpPurpose): Promise<void> {
     const code = await this.otpService.issue(purpose, email);
-    if (code) waitUntil(this.emailService.sendOtp(email, code, purpose));
+    if (code) await this.emailService.sendOtp(email, code, purpose);
   }
 
   private async issueTokens(
