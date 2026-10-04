@@ -109,6 +109,21 @@ export class UsersController {
     return this.users.removeAvatar(user);
   }
 
+  @Get('directory')
+  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @ApiOperation({
+    summary:
+      'Search active TENANT or MAINTENANCE_STAFF users, for creating a lease or assigning maintenance',
+  })
+  @ApiOkResponse({
+    type: UserDirectoryResponseDto,
+    isArray: true,
+    description: 'Paginated list; see `meta`',
+  })
+  findDirectory(@Query() query: ListUserDirectoryQueryDto) {
+    return this.users.findDirectory(query);
+  }
+
   @Patch(':id/status')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Activate or deactivate a user (ADMIN)' })
@@ -143,20 +158,5 @@ export class UsersController {
     @Req() req: Request,
   ): Promise<User> {
     return this.users.setRole(id, dto.role, actor, req.ip);
-  }
-
-  @Get('directory')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
-  @ApiOperation({
-    summary:
-      'Search active TENANT or MAINTENANCE_STAFF users, for creating a lease or assigning maintenance',
-  })
-  @ApiOkResponse({
-    type: UserDirectoryResponseDto,
-    isArray: true,
-    description: 'Paginated list; see `meta`',
-  })
-  findDirectory(@Query() query: ListUserDirectoryQueryDto) {
-    return this.users.findDirectory(query);
   }
 }

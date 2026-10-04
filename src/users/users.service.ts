@@ -4,23 +4,24 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsOrder, FindOptionsWhere, ILike, Repository } from 'typeorm';
+import { DataSource } from 'typeorm';
+import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
+import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
 import {
   Paginated,
   resolveSort,
   toSkip,
 } from '../common/pagination/pagination.utils.js';
+import { ImageRef } from '../common/uploads/image-ref.interface.js';
+import { UploadService } from '../common/uploads/upload.service.js';
+import { ListUserDirectoryQueryDto } from './dto/list-user-directory-query.dto.js';
 import { ListUsersQueryDto } from './dto/list-users-query.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { User, userAvatar } from './entities/user.entity.js';
 import { UserRole } from './enums/user-role.enum.js';
-import { InjectRepository } from '@nestjs/typeorm';
-import { UploadService } from '../common/uploads/upload.service.js';
-import { DataSource } from 'typeorm';
-import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
-import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
-import { ImageRef } from '../common/uploads/image-ref.interface.js';
-import { ListUserDirectoryQueryDto } from './dto/list-user-directory-query.dto.js';
+import { GoogleProfile } from '../auth/google.service.js';
 
 const USER_SORT_FIELDS = [
   'createdAt',
@@ -77,7 +78,7 @@ export class UsersService {
   /**
    * Finds the credentials required for authentication.
    * @param email - The email address used for authentication.
-   * @returns The user's ID, password hash, and active status if found.
+   * @returns The user's ID, password hash, and account status if found.
    */
   findCredentialsByEmail(
     email: string,
@@ -98,6 +99,15 @@ export class UsersService {
   }
 
   /**
+   * Finds a user by their Google account ID.
+   * @param googleId - The unique Google account ID.
+   * @returns The matching user, or `null` if no user is found.
+   */
+  findByGoogleId(googleId: string): Promise<User | null> {
+    return this.userRepo.findOneBy({ googleId });
+  }
+
+  /**
    * Creates and persists a new user.
    * @param data - The data required to create the user.
    * @returns The newly created user.
@@ -109,43 +119,43 @@ export class UsersService {
   }
 
   /**
-   * Sets a new avatar for the user.
-   * @param user The user whose avatar will be updated.
-   * @param file The new avatar image file.
-   * @returns The updated user.
-   * @throws BadRequestException if no avatar file is provided.
+   * Creates a new user from Google account information.
+   * The user's email is automatically marked as verified because it
+   * has been verified by Google during the OAuth flow.
+   * @param data - Google account and user profile data.
+   * @returns The newly created user.
    */
-  async setAvatar(user: User, file?: Express.Multer.File): Promise<User> {
-    if (!file) throw new BadRequestException('You do not have an avatar');
-
-    const [uploaded] = await this.uploadService.uploadImages(
-      [file],
-      'propflow/avatars',
-      1,
+  async createFromGoogle(data: GoogleProfile): Promise<User> {
+    const saved = await this.userRepo.save(
+      this.userRepo.create({
+        ...data,
+        passwordHash: null,
+        role: UserRole.TENANT,
+        isEmailVerified: true,
+      }),
     );
-    if (user.avatar.source === 'cloudinary') {
-      await this.uploadService.deleteImages([user.avatar]);
-    }
 
-    user.avatar = uploaded;
-    return this.userRepo.save(user);
+    return this.findById(saved.id);
   }
 
   /**
-   * Removes the user's current avatar and restores the default avatar.
-   * @param user The user whose avatar will be removed.
-   * @returns The updated user with the default avatar.
+   * Links a Google account to an existing user.
+   * @param user - The user to link the Google account to.
+   * @param googleId - The unique Google account ID.
+   * @param avatar - The user's Google profile image.
+   * @returns The updated user.
    */
-  async removeAvatar(user: User): Promise<User> {
+  async linkGoogleAccount(
+    user: User,
+    googleId: string,
+    avatar: ImageRef,
+  ): Promise<User> {
+    user.googleId = googleId;
+    user.isEmailVerified = true;
+
     if (user.avatar.source === 'default') {
-      throw new BadRequestException('You have no avatar');
+      user.avatar = avatar;
     }
-
-    if (user.avatar.source === 'cloudinary') {
-      await this.uploadService.deleteImages([user.avatar]);
-    }
-
-    user.avatar = userAvatar;
 
     return this.userRepo.save(user);
   }
@@ -153,7 +163,6 @@ export class UsersService {
   /**
    * Marks a user's email address as verified.
    * @param id - The ID of the user whose email should be marked as verified.
-   * @returns A promise that resolves when the update is completed.
    */
   async makeEmailVerified(id: string): Promise<void> {
     await this.userRepo.update({ id }, { isEmailVerified: true });
@@ -172,9 +181,54 @@ export class UsersService {
   }
 
   /**
+   * Sets a new avatar for the user.
+   * @param user - The user whose avatar will be updated.
+   * @param file - The new avatar image file.
+   * @returns The updated user.
+   * @throws BadRequestException if no avatar file is provided.
+   */
+  async setAvatar(user: User, file?: Express.Multer.File): Promise<User> {
+    if (!file) {
+      throw new BadRequestException('You do not have an avatar');
+    }
+
+    const [uploaded] = await this.uploadService.uploadImages(
+      [file],
+      'propflow/avatars',
+      1,
+    );
+
+    if (user.avatar.source === 'cloudinary') {
+      await this.uploadService.deleteImages([user.avatar]);
+    }
+
+    user.avatar = uploaded;
+    return this.userRepo.save(user);
+  }
+
+  /**
+   * Removes the user's current avatar and restores the default avatar.
+   * @param user - The user whose avatar will be removed.
+   * @returns The updated user with the default avatar.
+   */
+  async removeAvatar(user: User): Promise<User> {
+    if (user.avatar.source === 'default') {
+      throw new BadRequestException('You have no avatar to remove');
+    }
+
+    if (user.avatar.source === 'cloudinary') {
+      await this.uploadService.deleteImages([user.avatar]);
+    }
+
+    user.avatar = userAvatar;
+
+    return this.userRepo.save(user);
+  }
+
+  /**
    * Retrieves users with optional filtering, sorting, and pagination.
    * @param query - Filtering, sorting, and pagination parameters.
-   * @returns A paginated list of users and the total number of matching users.
+   * @returns A paginated list of users.
    */
   async findAll(query: ListUsersQueryDto): Promise<Paginated<User>> {
     const where: FindOptionsWhere<User> = {};
@@ -205,14 +259,17 @@ export class UsersService {
 
   /**
    * A minimal, safe directory for OWNER/ADMIN to find an active TENANT
-   * (for creating a lease) or MAINTENANCE_STAFF (for assigning a maintenance
-   * request). Deliberately excludes ADMIN/OWNER accounts and every field
-   * beyond name/email/role — this is not the admin user-management endpoint.
+   * or MAINTENANCE_STAFF. This deliberately excludes ADMIN/OWNER accounts
+   * and fields beyond the user directory response.
    */
   async findDirectory(
     query: ListUserDirectoryQueryDto,
   ): Promise<Paginated<User>> {
-    const base = { role: query.role, isActive: true };
+    const base = {
+      role: query.role,
+      isActive: true,
+    };
+
     const where: FindOptionsWhere<User> | FindOptionsWhere<User>[] =
       query.search
         ? [
@@ -238,11 +295,8 @@ export class UsersService {
    * @param id - The ID of the user whose status should be changed.
    * @param isActive - Whether the account should be active.
    * @param actor - The user performing the action.
-   * @param ip - The user ip who performing the action.
+   * @param ip - The IP address of the actor.
    * @returns The updated user.
-   * @throws UnprocessableEntityException If the actor tries to deactivate
-   * their own account.
-   * @throws NotFoundException If the target user does not exist.
    */
   async setStatus(
     id: string,
@@ -261,6 +315,7 @@ export class UsersService {
 
     return this.dataSource.transaction(async (manager) => {
       const saved = await manager.save(user);
+
       await this.auditLogsService.record(manager, {
         userId: actor.id,
         action: AuditAction.USER_STATUS_CHANGED,
@@ -269,6 +324,7 @@ export class UsersService {
         metadata: { isActive },
         ipAddress: ip,
       });
+
       return saved;
     });
   }
@@ -279,11 +335,8 @@ export class UsersService {
    * @param id - The ID of the user whose role should be changed.
    * @param role - The new role to assign.
    * @param actor - The user performing the action.
-   * @param ip - The user ip who performing the action.
+   * @param ip - The IP address of the actor.
    * @returns The updated user.
-   * @throws UnprocessableEntityException If the actor tries to change
-   * their own role.
-   * @throws NotFoundException If the target user does not exist.
    */
   async setRole(
     id: string,
@@ -300,6 +353,7 @@ export class UsersService {
 
     return this.dataSource.transaction(async (manager) => {
       const saved = await manager.save(user);
+
       await this.auditLogsService.record(manager, {
         userId: actor.id,
         action: AuditAction.ROLE_CHANGED,
@@ -308,63 +362,8 @@ export class UsersService {
         metadata: { role },
         ipAddress: ip,
       });
+
       return saved;
     });
-  }
-
-  /**
-   * Finds a user by their Google account ID.
-   * @param googleId - The unique Google account ID.
-   * @returns The matching user, or null if no user is found.
-   */
-  findByGoogleId(googleId: string): Promise<User | null> {
-    return this.userRepo.findOneBy({ googleId });
-  }
-
-  /**
-   * Links a Google account to an existing user.
-   * @param user - The user to link the Google account to.
-   * @param googleId - The unique Google account ID.
-   * @returns The updated user.
-   */
-  async linkGoogleAccount(
-    user: User,
-    googleId: string,
-    avatar: ImageRef,
-  ): Promise<User> {
-    user.googleId = googleId;
-    user.isEmailVerified = true;
-
-    if (user.avatar.source === 'default') {
-      user.avatar = avatar;
-    }
-
-    return this.userRepo.save(user);
-  }
-
-  /**
-   * Creates a new user from Google account information.
-   * The user's email is automatically marked as verified because it
-   * has been verified by Google during the OAuth flow.
-   * @param data - Google account and user profile data.
-   * @returns The newly created user.
-   */
-  async createFromGoogle(data: {
-    email: string;
-    googleId: string;
-    firstName: string;
-    lastName: string;
-    avatar: ImageRef;
-  }): Promise<User> {
-    const saved = await this.userRepo.save(
-      this.userRepo.create({
-        ...data,
-        passwordHash: null,
-        role: UserRole.TENANT,
-        isEmailVerified: true,
-      }),
-    );
-
-    return this.findById(saved.id);
   }
 }

@@ -20,13 +20,11 @@ export class PasswordService {
     }
   }
 
-  /** Burns the same time as a real check, so login timing can't reveal not found emails. */
   async verifyDummy(password: string): Promise<void> {
     this.dummyHash ??= this.hash(randomBytes(16).toString('hex'));
     await this.verify(await this.dummyHash, password);
   }
 
-  // bcrypt silently ignores everything after the first 72 bytes SHA-256 first makes the whole password count.
   private prehash(password: string): string {
     return createHash('sha256').update(password).digest('base64');
   }

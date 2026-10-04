@@ -1,16 +1,17 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
   Req,
   Res,
-  Get,
-  UseGuards,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -23,24 +24,21 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { Public } from '../common/decorators/public.decorator.js';
-import { UserResponseDto } from '../users/dto/user-response.dto.js';
-import { User } from '../users/entities/user.entity.js';
-import { REFRESH_TOKEN_COOKIE } from './constants/auth.constants.js';
-import { AuthService } from './auth.service.js';
+import { GoogleAuthGuard } from '../common/guards/google-auth.guard.js';
+import { EmailDto } from './dto/email.dto.js';
 import { AccessTokenDto, LoginResponseDto } from './dto/auth-response.dto.js';
-import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
+import { MessageResponseDto } from './dto/message-response.dto.js';
+import { RegisterDto } from './dto/register.dto.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import { VerifyEmailDto } from './dto/verify-email.dto.js';
+import { AuthService } from './auth.service.js';
+import { GoogleProfile } from './google.service.js';
+import { REFRESH_TOKEN_COOKIE } from './constants/auth.constants.js';
 import {
   clearRefreshTokenCookie,
   setRefreshTokenCookie,
 } from './utils/refresh-cookie.util.js';
-import { EmailDto } from './dto/email.dto.js';
-import { MessageResponseDto } from './dto/message-response.dto.js';
-import { ResetPasswordDto } from './dto/reset-password.dto.js';
-import { VerifyEmailDto } from './dto/verify-email.dto.js';
-import { GoogleAuthGuard } from '../common/guards/google-auth.guard.js';
-import { GoogleProfile } from './google.service.js';
-import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Auth')
 @Public()
@@ -74,7 +72,9 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { refreshToken, ...body } = await this.authService.login(dto);
+
     setRefreshTokenCookie(res, refreshToken, this.config);
+
     return body;
   }
 
@@ -85,32 +85,34 @@ export class AuthController {
 
   @Get('google/callback')
   @UseGuards(GoogleAuthGuard)
-  @ApiOperation({ summary: 'Google OAuth callback' })
-  @ApiOkResponse({ type: LoginResponseDto })
+  @ApiOperation({
+    summary:
+      'Google OAuth callback. Sets the session cookie and redirects to the frontend',
+  })
   async googleCallback(
     @Req() req: Request & { user: GoogleProfile },
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const { refreshToken, ...body } = await this.authService.loginWithGoogle(
-      req.user,
-    );
+    @Res() res: Response,
+  ): Promise<void> {
+    const { refreshToken } = await this.authService.loginWithGoogle(req.user);
+
     setRefreshTokenCookie(res, refreshToken, this.config);
-    return body;
+
+    res.redirect(this.config.getOrThrow<string>('FRONTEND_URL'));
   }
 
   // @Get('google/callback')
   // @UseGuards(GoogleAuthGuard)
-  // @ApiOperation({
-  //   summary:
-  //     'Google OAuth callback — redirects to the frontend with the session cookie set',
-  // })
+  // @ApiOperation({ summary: 'Google OAuth callback' })
+  // @ApiOkResponse({ type: LoginResponseDto })
   // async googleCallback(
   //   @Req() req: Request & { user: GoogleProfile },
-  //   @Res() res: Response, // لاحظ: من غير passthrough، إحنا متحكمين في الـ response بالكامل
-  // ): Promise<void> {
-  //   const { refreshToken } = await this.authService.loginWithGoogle(req.user);
+  //   @Res({ passthrough: true }) res: Response,
+  // ) {
+  //   const { refreshToken, ...body } = await this.authService.loginWithGoogle(
+  //     req.user,
+  //   );
   //   setRefreshTokenCookie(res, refreshToken, this.config);
-  //   res.redirect(this.config.getOrThrow<string>('FRONTEND_URL'));
+  //   return body;
   // }
 
   @Post('refresh')
@@ -128,10 +130,15 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const token = req.cookies?.[REFRESH_TOKEN_COOKIE];
-    if (!token) throw new UnauthorizedException('Missing refresh token');
+
+    if (!token) {
+      throw new UnauthorizedException('Missing refresh token');
+    }
 
     const { refreshToken, ...body } = await this.authService.refresh(token);
+
     setRefreshTokenCookie(res, refreshToken, this.config);
+
     return body;
   }
 
@@ -146,10 +153,12 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<null> {
     const token = req.cookies?.[REFRESH_TOKEN_COOKIE];
+
     if (token) {
       await this.authService.logout(token);
       clearRefreshTokenCookie(res, this.config);
     }
+
     return null;
   }
 

@@ -9,7 +9,6 @@ import {
   OTP_TTL_SECONDS,
 } from './constants/otp.constants.js';
 
-// Atomically verifies an OTP using a Redis Lua script.
 const VERIFY_SCRIPT = `
 local data = redis.call('HMGET', KEYS[1], 'hash', 'attempts')
 if not data[1] then return 'MISSING' end
