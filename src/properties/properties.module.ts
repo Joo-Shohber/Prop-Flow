@@ -6,12 +6,14 @@ import { Property } from './entities/property.entity.js';
 import { PropertiesController } from './properties.controller.js';
 import { PropertiesService } from './properties.service.js';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Property, Unit]),
     UsersModule,
     AuditLogsModule,
+    NotificationsModule,
   ],
   controllers: [PropertiesController],
   providers: [PropertiesService],

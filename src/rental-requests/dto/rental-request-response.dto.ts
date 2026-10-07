@@ -12,7 +12,6 @@ export class RentalRequestTenantSummaryDto {
 export class RentalRequestUnitSummaryDto {
   @ApiProperty() id: string;
   @ApiProperty() unitNumber: string;
-  @ApiProperty() building: string;
   @ApiProperty() propertyId: string;
   @ApiProperty() rentAmount: number;
 }
@@ -33,9 +32,6 @@ export class RentalRequestResponseDto {
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
 
-  /** * Maps an entity to the public response shape.
-   * Only whitelisted tenant/unit fields are exposed,
-   * so the raw User and Unit entities are never serialized. */
   static fromEntity(entity: RentalRequest): RentalRequestResponseDto {
     const dto = new RentalRequestResponseDto();
     dto.id = entity.id;
@@ -60,7 +56,6 @@ export class RentalRequestResponseDto {
       dto.unit = {
         id: entity.unit.id,
         unitNumber: entity.unit.unitNumber,
-        building: entity.unit.building,
         propertyId: entity.unit.propertyId,
         rentAmount: entity.unit.rentAmount,
       };

@@ -61,7 +61,8 @@ export class LeasesService {
       where: { id },
       relations: { unit: { property: true } },
     });
-    if (!lease) throw new NotFoundException('Lease not found');
+    if (!lease?.unit?.property) throw new NotFoundException('Lease not found');
+
     return lease;
   }
 
@@ -75,10 +76,12 @@ export class LeasesService {
    */
   async findForActor(actor: User, id: string): Promise<Lease> {
     await this.leaseExpiration.run();
+
     const lease = await this.findOne(id);
     if (!canAccessLease(actor, lease)) {
       throw new ForbiddenException('You do not have access to this lease');
     }
+
     return lease;
   }
 
@@ -119,9 +122,7 @@ export class LeasesService {
     if (query.unitId)
       queryBuilder.andWhere('lease.unitId = :unitId', { unitId: query.unitId });
     if (query.tenantId)
-      queryBuilder.andWhere('lease.tenantId = :tenantId', {
-        tenantId: query.tenantId,
-      });
+      queryBuilder.andWhere('lease.tenantId = :tenantId', { tenantId: query.tenantId });
 
     const [data, total] = await queryBuilder
       .orderBy(`lease.${sortBy}`, sortOrder)
@@ -171,14 +172,27 @@ export class LeasesService {
     }
 
     return this.dataSource.transaction(async (manager) => {
+      const lockedUnit = await manager
+        .createQueryBuilder(Unit, 'unit')
+        .setLock('pessimistic_write')
+        .where('unit.id = :id', { id: unit.id })
+        .getOne();
+
+      if (!lockedUnit) {
+        throw new NotFoundException('Unit not found');
+      }
+      if (lockedUnit.status !== UnitStatus.AVAILABLE) {
+        throw new ConflictException('The unit is not AVAILABLE');
+      }
+
       const lease = manager.create(Lease, {
         tenantId: tenant.id,
-        unitId: unit.id,
+        unitId: lockedUnit.id,
         startDate: dto.startDate,
         endDate: dto.endDate,
         notes: dto.notes ?? null,
         status: LeaseStatus.PENDING,
-        rentAmount: unit.rentAmount,
+        rentAmount: lockedUnit.rentAmount,
       });
       const saved = await manager.save(lease);
 
@@ -186,7 +200,7 @@ export class LeasesService {
         recipientId: tenant.id,
         type: NotificationType.LEASE_CREATED,
         title: 'New lease created',
-        message: `A lease for unit ${unit.unitNumber} has been created for you.`,
+        message: `A lease for unit ${lockedUnit.unitNumber} has been created for you.`,
         relatedEntityType: 'Lease',
         relatedEntityId: saved.id,
       });
@@ -217,7 +231,6 @@ export class LeasesService {
    * @throws BadRequestException If the resulting dates are invalid.
    */
   async update(actor: User, id: string, dto: UpdateLeaseDto): Promise<Lease> {
-    await this.leaseExpiration.run();
     const lease = await this.findForActor(actor, id);
 
     if (lease.status !== LeaseStatus.PENDING) {
@@ -264,9 +277,11 @@ export class LeasesService {
       });
       if (!unit) throw new NotFoundException('Unit not found');
       if (!unit.property) throw new NotFoundException('Property not found');
+
       if (!canManageProperty(actor, unit.property)) {
         throw new ForbiddenException('You do not have access to this lease');
       }
+
       if (lease.status !== LeaseStatus.PENDING) {
         throw new ConflictException('Only a PENDING lease can be activated');
       }
@@ -282,6 +297,7 @@ export class LeasesService {
 
       lease.status = LeaseStatus.ACTIVE;
       lockedUnit.status = UnitStatus.RENTED;
+
       await manager.save(lease);
       await manager.save(lockedUnit);
 
@@ -338,9 +354,11 @@ export class LeasesService {
       });
       if (!unit) throw new NotFoundException('Unit not found');
       if (!unit.property) throw new NotFoundException('Property not found');
+
       if (!canManageProperty(actor, unit.property)) {
         throw new ForbiddenException('You do not have access to this lease');
       }
+
       if (
         lease.status !== LeaseStatus.PENDING &&
         lease.status !== LeaseStatus.ACTIVE

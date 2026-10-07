@@ -48,6 +48,9 @@ import {
   UNIT_MAX_IMAGES,
 } from '../common/uploads/upload.constants.js';
 
+const READ_ROLES = [UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN] as const;
+const MANAGE_ROLES = [UserRole.OWNER, UserRole.ADMIN] as const;
+
 @ApiTags('Units')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({
@@ -58,7 +61,7 @@ export class UnitsController {
   constructor(private readonly unitsService: UnitsService) {}
 
   @Get('units')
-  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...READ_ROLES)
   @ApiOperation({
     summary: 'List units (TENANT: AVAILABLE only, OWNER: own, ADMIN: all)',
   })
@@ -72,7 +75,7 @@ export class UnitsController {
   }
 
   @Post('properties/:propertyId/units')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({ summary: 'Create a unit under a property' })
   @ApiCreatedResponse({ type: UnitResponseDto })
   @ApiForbiddenResponse({
@@ -83,12 +86,13 @@ export class UnitsController {
     @CurrentUser() actor: User,
     @Param('propertyId', ParseUUIDPipe) propertyId: string,
     @Body() dto: CreateUnitDto,
+    @Req() req: Request,
   ): Promise<Unit> {
-    return this.unitsService.create(actor, propertyId, dto);
+    return this.unitsService.create(actor, propertyId, dto, req.ip);
   }
 
   @Get('units/:id')
-  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...READ_ROLES)
   @ApiOperation({
     summary:
       'Get a unit (TENANT: AVAILABLE units only, OWNER: own properties, ADMIN: all)',
@@ -104,7 +108,7 @@ export class UnitsController {
   }
 
   @Patch('units/:id')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({ summary: 'Update a unit (not its status)' })
   @ApiOkResponse({ type: UnitResponseDto })
   @ApiForbiddenResponse({ description: 'No access to this unit' })
@@ -118,7 +122,7 @@ export class UnitsController {
   }
 
   @Delete('units/:id')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete a unit' })
   @ApiForbiddenResponse({ description: 'No access to this unit' })
@@ -126,13 +130,14 @@ export class UnitsController {
   async remove(
     @CurrentUser() actor: User,
     @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request,
   ): Promise<null> {
-    await this.unitsService.remove(actor, id);
+    await this.unitsService.remove(actor, id, req.ip);
     return null;
   }
 
   @Patch('units/:id/status')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({ summary: 'Manually toggle AVAILABLE <-> MAINTENANCE' })
   @ApiOkResponse({ type: UnitResponseDto })
   @ApiForbiddenResponse({ description: 'No access to this unit' })
@@ -147,6 +152,7 @@ export class UnitsController {
   }
 
   @Post('units/:id/images')
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({
     summary: `Upload unit images (max ${UNIT_MAX_IMAGES}, jpeg/png/webp)`,
   })
@@ -177,6 +183,7 @@ export class UnitsController {
   }
 
   @Delete('units/:id/images')
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({ summary: 'Remove a unit image' })
   @ApiOkResponse({ type: UnitResponseDto })
   @ApiForbiddenResponse({ description: 'No access to this unit' })

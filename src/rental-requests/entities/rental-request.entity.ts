@@ -15,6 +15,10 @@ import { RentalRequestStatus } from '../enums/rental-request-status.enum.js';
 
 @Entity('rental_requests')
 @Check(`"startDate" < "endDate"`)
+@Index(['tenantId', 'unitId'], {
+  unique: true,
+  where: `"status" = 'PENDING'`,
+})
 export class RentalRequest {
   @PrimaryGeneratedColumn('uuid')
   id: string;

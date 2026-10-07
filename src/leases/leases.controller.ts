@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -32,7 +33,6 @@ import { ListLeasesQueryDto } from './dto/list-leases-query.dto.js';
 import { UpdateLeaseDto } from './dto/update-lease.dto.js';
 import { Lease } from './entities/lease.entity.js';
 import { LeasesService } from './leases.service.js';
-import { Req } from '@nestjs/common';
 import type { Request } from 'express';
 
 const READ_ROLES = [UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN] as const;

@@ -15,16 +15,13 @@ import { UnitStatus } from '../enums/unit-status.enum.js';
 import { ImageRef } from '../../common/uploads/image-ref.interface.js';
 
 @Entity('units')
-@Unique(['propertyId', 'building', 'unitNumber'])
+@Unique(['propertyId', 'unitNumber'])
 export class Unit {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @Column({ type: 'varchar', length: 50 })
   unitNumber: string;
-
-  @Column({ type: 'varchar', length: 100 })
-  building: string;
 
   @Column({ type: 'int', nullable: true })
   floor: number | null;

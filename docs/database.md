@@ -1,33 +1,32 @@
 # Database
 
-PostgreSQL, accessed exclusively through TypeORM. `synchronize` is `false` in every environment; the schema is defined entirely by `src/database/migrations/*` and is expected to be applied with `npm run migration:run`. The database role needs privileges to `CREATE EXTENSION`, because two extensions are required: `uuid-ossp` and `btree_gist` (the latter for the lease exclusion constraint). In production (`NODE_ENV=production`) the connection uses SSL.
+PostgreSQL, accessed exclusively through TypeORM. `synchronize` is `false` in every environment; the schema is defined entirely by `src/database/migrations/*` and is expected to be applied with `npm run migration:run`.
 
 ## Entities
 
 ### `User` (`users`)
 
-- `id` (uuid, PK), `email` (varchar 255, unique), `passwordHash` (varchar 255, nullable — null for Google-only accounts, `select: false` by default), `firstName`, `lastName` (varchar 100), `phone` (varchar 30, nullable), `role` (enum, default `TENANT`), `isActive` (default `true`), `isEmailVerified` (default `false`), `avatar` (jsonb `{url, publicId}`, nullable), `googleId` (varchar 255, unique, nullable), `createdAt`, `updatedAt`.
+- `id` (uuid, PK), `email` (unique), `passwordHash` (nullable — null for Google-only accounts, `select: false` by default), `firstName`, `lastName`, `phone` (nullable), `role` (enum, default `TENANT`), `isActive` (default `true`), `isEmailVerified` (default `false`), `avatar` (jsonb `{url, publicId}`, nullable), `googleId` (unique, nullable), `createdAt`, `updatedAt`.
 
 ### `RefreshToken` (`refresh_tokens`)
 
-- `id` (uuid PK, equals the JWT `jti`), `userId` (FK -> `users`, `CASCADE`), `family` (uuid), `tokenHash` (varchar 64, sha256 hex), `expiresAt`, `revoked` (default `false`), `createdAt`.
+- `id` (uuid PK, equals the JWT `jti`), `userId` (FK -> `users`, `CASCADE`), `family` (uuid), `tokenHash` (sha256 hex), `expiresAt`, `revoked` (default `false`), `createdAt`.
 - Indexes: `userId`, `family`.
 
 ### `Property` (`properties`)
 
-- `id`, `name` (varchar 150), `description` (nullable), `propertyType` (enum), `address` (varchar 255), `city` (varchar 100), `country` (varchar 100), `ownerId` (FK -> `users`, `CASCADE`), `images` (jsonb array of `{url, publicId}`, default `[]`, max 10 enforced by the application), `createdAt`, `updatedAt`, `deletedAt` (soft delete).
+- `id`, `name`, `description` (nullable), `propertyType` (enum), `address`, `city`, `country` (default `'Egypt'`), `ownerId` (FK -> `users`, `CASCADE`), `images` (jsonb array, default `[]`), `createdAt`, `updatedAt`, `deletedAt` (soft delete).
 - Indexes: `propertyType`, `city`, `ownerId`.
 
 ### `Unit` (`units`)
 
-- `id`, `unitNumber` (varchar 50), `building` (varchar 100, free-text label), `floor` (int, nullable), `area` (numeric 10,2), `rentAmount` (numeric 10,2 — the unit's current asking rent), `bedrooms` (smallint), `bathrooms` (smallint), `description` (nullable), `propertyId` (FK -> `properties`, `CASCADE`), `status` (enum, default `AVAILABLE`), `images` (jsonb array of `{url, publicId}`, default `[]`, max 10 enforced by the application), `createdAt`, `updatedAt`.
-- Constraint: `UNIQUE (propertyId, building, unitNumber)`.
+- `id`, `unitNumber`, `floor` (nullable), `area` (numeric 10,2), `rentAmount` (integer — the unit's current asking rent), `bedrooms` (smallint), `bathrooms` (smallint), `description` (nullable), `propertyId` (FK -> `properties`, `CASCADE`), `status` (enum, default `AVAILABLE`), `createdAt`, `updatedAt`.
+- Constraint: `UNIQUE (propertyId, unitNumber)`.
 - Indexes: `bedrooms`, `propertyId`, `status`.
-- `Unit` has no soft delete of its own. Because `Property` does, units under a soft-deleted property are hidden by explicit `property."deletedAt" IS NULL` conditions in every query that reaches `Unit` through `Property` (see `business-logic.md`, "Soft-deleted properties"); the database itself does not enforce this.
 
 ### `Lease` (`leases`)
 
-- `id`, `tenantId` (FK -> `users`, `RESTRICT`), `unitId` (FK -> `units`, `RESTRICT`), `startDate`, `endDate` (both `date`), `rentAmount` (numeric 10,2 — copied at creation time, not a reference to the unit's current rent), `status` (enum, default `PENDING`), `notes` (nullable), `createdAt`, `updatedAt`.
+- `id`, `tenantId` (FK -> `users`, `RESTRICT`), `unitId` (FK -> `units`, `RESTRICT`), `startDate`, `endDate` (both `date`), `rentAmount` (integer — copied at creation time, not a reference to the unit's current rent), `status` (enum, default `PENDING`), `notes` (nullable), `createdAt`, `updatedAt`.
 - `CHECK ("startDate" < "endDate")`.
 - `EXCLUDE USING gist ("unitId" WITH =, daterange("startDate","endDate",'[]') WITH &&) WHERE (status IN ('PENDING','ACTIVE'))` — requires the `btree_gist` extension; enforces that no two PENDING/ACTIVE leases of the same unit can have overlapping date ranges, at the database level, under concurrent writes. This is also the final concurrency guard for rental request approval.
 - Partial unique index: `UNIQUE (unitId) WHERE status = 'ACTIVE'` — at most one active lease per unit.
@@ -35,15 +34,16 @@ PostgreSQL, accessed exclusively through TypeORM. `synchronize` is `false` in ev
 
 ### `RentalRequest` (`rental_requests`)
 
-- `id` (uuid PK), `tenantId` (FK -> `users`, `RESTRICT`), `unitId` (FK -> `units`, `RESTRICT`), `startDate`, `endDate` (both `date`), `rentAmount` (numeric 10,2 — snapshot of the unit's rent when the request was made, copied to the lease on approval), `message` (nullable text, max 1000 characters enforced by the application), `status` (enum `PENDING`/`APPROVED`/`REJECTED`, default `PENDING`), `createdAt`, `updatedAt`.
+- `id` (uuid PK), `tenantId` (FK -> `users`, `RESTRICT`), `unitId` (FK -> `units`, `RESTRICT`), `startDate`, `endDate` (both `date`), `rentAmount` (integer — snapshot of the unit's rent when the request was made, copied to the lease on approval), `message` (nullable text), `status` (enum `PENDING`/`APPROVED`/`REJECTED`, default `PENDING`), `createdAt`, `updatedAt`.
 - `CHECK ("startDate" < "endDate")`, mirroring `leases`.
+- `UNIQUE (tenantId, unitId)` (constraint `UQ_rental_request_tenant_unit`): a tenant has at most one rental request per unit, in any status.
 - Indexes: `tenantId`, `unitId`, `status`.
 - There is no direct relation to `properties`: a request reaches its property through `unit -> property`, which is what ownership checks and owner-scoped listings join on.
-- There is intentionally **no** overlap/exclusion constraint and **no** uniqueness constraint on this table. A request does not reserve a unit, so overlapping and duplicate pending requests are allowed; conflicts are resolved at approval time by the `leases` constraints.
+- There is intentionally **no** overlap/exclusion constraint on this table. A request does not reserve a unit, so different tenants may hold overlapping pending requests for the same unit; conflicts are resolved at approval time by the `leases` constraints. The only uniqueness rule is `(tenantId, unitId)`: one request per tenant per unit, whatever its status (a rejected tenant cannot re-request the same unit).
 
 ### `MaintenanceRequest` (`maintenance_requests`)
 
-- `id`, `title` (varchar 150), `description`, `category` (enum), `priority` (enum), `images` (jsonb array, default `[]`, up to 5; addable while `OPEN`), `unitId` (FK -> `units`, `RESTRICT`), `tenantId` (FK -> `users`, `RESTRICT`), `status` (enum, default `OPEN`), `assignedStaffId` (FK -> `users`, `RESTRICT`, nullable), `scheduledDate` (nullable date), `completionImages` (jsonb array, default `[]`, up to 5, set on completion), `resolutionDescription` (nullable), `resolvedAt` (nullable), `createdAt`, `updatedAt`.
+- `id`, `title`, `description`, `category` (enum), `priority` (enum), `images` (jsonb array, default `[]`), `unitId` (FK -> `units`, `RESTRICT`), `tenantId` (FK -> `users`, `RESTRICT`), `status` (enum, default `OPEN`), `assignedStaffId` (FK -> `users`, `RESTRICT`, nullable), `scheduledDate` (nullable date), `completionImages` (jsonb array, default `[]`), `resolutionDescription` (nullable), `resolvedAt` (nullable), `createdAt`, `updatedAt`.
 - Indexes: `priority`, `unitId`, `status`, `assignedStaffId`.
 
 ### `MaintenanceStatusHistory` (`maintenance_status_history`)
@@ -53,12 +53,12 @@ PostgreSQL, accessed exclusively through TypeORM. `synchronize` is `false` in ev
 
 ### `Notification` (`notifications`)
 
-- `id`, `recipientId` (FK -> `users`, `CASCADE`), `type` (enum), `title` (varchar 150), `message`, `isRead` (default `false`), `relatedEntityType` (varchar 50, nullable, e.g. `"Lease"`, `"RentalRequest"`, `"MaintenanceRequest"`), `relatedEntityId` (nullable uuid), `createdAt`.
+- `id`, `recipientId` (FK -> `users`, `CASCADE`), `type` (enum), `title`, `message`, `isRead` (default `false`), `relatedEntityType` (nullable), `relatedEntityId` (nullable uuid), `createdAt`.
 - Composite index `(recipientId, isRead)`.
 
 ### `AuditLog` (`audit_logs`)
 
-- `id`, `userId` (FK -> `users`, `RESTRICT` — the acting user), `action` (enum), `entity` (varchar 50, e.g. `"Property"`, `"RentalRequest"`), `entityId` (uuid), `metadata` (jsonb, nullable), `ipAddress` (varchar 45, nullable), `createdAt`.
+- `id`, `userId` (FK -> `users`, `RESTRICT` — the acting user), `action` (enum), `entity` (varchar, e.g. `"Property"`, `"RentalRequest"`), `entityId` (uuid), `metadata` (jsonb, nullable), `ipAddress` (nullable), `createdAt`.
 - Indexes: `userId`, `action`, `entity`.
 
 ## Enums
@@ -66,7 +66,7 @@ PostgreSQL, accessed exclusively through TypeORM. `synchronize` is `false` in ev
 | Enum                  | Values                                                                                                                                                                                                                                                                                        |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `UserRole`            | `TENANT`, `OWNER`, `MAINTENANCE_STAFF`, `ADMIN`                                                                                                                                                                                                                                               |
-| `PropertyType`        | `APARTMENT`, `VILLA`, `STUDIO`, `TOWNHOUSE`, `COMMERCIAL`, `OTHER`                                                                                                                                                                                                                            |
+| `PropertyType`        | `BUILDING`, `VILLA`, `STUDIO`, `TOWNHOUSE`, `COMMERCIAL`, `OTHER`                                                                                                                                                                                                                             |
 | `UnitStatus`          | `AVAILABLE`, `RENTED`, `MAINTENANCE`                                                                                                                                                                                                                                                          |
 | `LeaseStatus`         | `PENDING`, `ACTIVE`, `TERMINATED`, `EXPIRED`                                                                                                                                                                                                                                                  |
 | `RentalRequestStatus` | `PENDING`, `APPROVED`, `REJECTED`                                                                                                                                                                                                                                                             |
@@ -90,26 +90,21 @@ PostgreSQL, accessed exclusively through TypeORM. `synchronize` is `false` in ev
 | `MaintenanceStatusHistory -> MaintenanceRequest`                   | `CASCADE`  | History rows have no meaning without their parent request.                                                 |
 | `MaintenanceStatusHistory -> User` (changedBy), `AuditLog -> User` | `RESTRICT` | Preserves the identity of who performed a historical action.                                               |
 
-Note that `RESTRICT` here is largely defensive: the application never hard-deletes `User`, `Lease`, or `RentalRequest` rows in practice (users are deactivated, properties are soft-deleted) — these constraints exist as a safety net against an application bug, not as an expected code path. One consequence worth knowing: because `leases.unitId` and `rental_requests.unitId` are `RESTRICT`, a unit that has any lease or any rental request (in any status) cannot be hard-deleted via `DELETE /units/:id`; the database rejects the delete with foreign key error `23503`. See "Verify" for how that error is surfaced.
+Soft-deleting a property does not cascade at the database level: its units and leases stay in their tables. `PropertiesService.remove` therefore terminates the property's `PENDING` leases itself (and refuses to run while a unit is `RENTED`).
+
+Note that `RESTRICT` here is largely defensive: the application never hard-deletes `User`, `Unit`, `Lease`, or `RentalRequest` rows in practice (users are deactivated, properties are soft-deleted, units/leases are only removed when no dependent records exist) — these constraints exist as a safety net against an application bug, not as an expected code path. One consequence worth knowing: because `rental_requests.unitId` is `RESTRICT`, a unit that has any rental request (in any status) cannot be hard-deleted via `DELETE /units/:id`; the delete fails with `409` (mapped from foreign key error `23503`).
 
 ## Migrations
-
-Migration scripts (see `README.md` for the full list): `migration:generate -- <path>` diffs entities against the database and writes a migration, `migration:create -- <path>` creates a blank one, `migration:run` applies pending migrations, `migration:revert` rolls back the last one. They run through `typeorm-ts-node-esm` using `src/database/data-source.ts`. On Vercel, the build command is `npm run migration:run && npm run build`, so pending migrations are applied as part of every deployment.
 
 - **`InitSchema<timestamp>`** — the full schema in one migration. Its `up()` explicitly creates the `uuid-ossp` and `btree_gist` extensions before creating any table (TypeORM's driver would otherwise attempt this automatically on connect, but the migration makes it explicit rather than relying on that side effect). Verified end-to-end against a genuinely empty database: `up()` succeeds, `down()` fully reverses it (0 tables, 0 enum types remaining), and `up()` was re-run afterward to confirm no residual state. `down()` intentionally does not replay the reverse-order log output verbatim — dropping enum types before the columns that use them fails in PostgreSQL — and instead drops every table with `CASCADE` (leaf tables first) followed by every enum type.
 - **`AddGoogleAuth<timestamp>`** — drops the `NOT NULL` constraint on `passwordHash` and adds the unique, nullable `googleId` column, for Google-only accounts.
 - **`AddPropertyCreatedAuditAction<timestamp>`** — `ALTER TYPE audit_logs_action_enum ADD VALUE 'PROPERTY_CREATED'`. Its `down()` is a documented no-op: PostgreSQL cannot remove a single enum value without recreating the type, and an unused enum value is harmless.
-- **`AddRentalRequests<timestamp>`** — generated with `npm run migration:generate` and reviewed before being run. It creates the `rental_requests` table (with its enum type, foreign keys, indexes and `CHECK` constraint) and extends the `notifications.type` and `audit_logs.action` enums with the `RENTAL_REQUEST_*` values.
-- **`AddUnitImages<timestamp>`** — adds the `images` jsonb column (default `[]`) to `units`, matching the property image pattern.
-- **`AddRentAmount<timestamp>`** — adds the `rentAmount` (numeric 10,2) column to `units`, `leases` and `rental_requests`.
+- **Schema changes made while the database held no property or unit data** (the `APARTMENT` → `BUILDING` enum value, removal of `units.building` with the unique constraint becoming `(propertyId, unitNumber)`, `rentAmount` as an integer on `units`/`leases`/`rental_requests`, unit images, the `country` default) were folded into regenerated migrations instead of hand-written data-preserving ones. On a database that already holds rows these would need data-aware migrations (for example `ALTER TYPE ... RENAME VALUE` for the enum).
+- **`AddRentalRequests<timestamp>`** — generated with `npm run migration:generate` and reviewed before being run. It creates the `rental_requests` table (with its enum type, foreign keys, indexes and `CHECK` constraint), extends the `notifications.type` and `audit_logs.action` enums with the `RENTAL_REQUEST_*` values, and adds the `rentAmount` column where it does not already exist (`units`, `leases`).
 
-> **Verify:** Confirm all six migration files exist in `src/database/migrations/` and have been applied to every environment. In particular, without `AddPropertyCreatedAuditAction`, inserting an audit row with action `PROPERTY_CREATED` fails with an invalid enum value error, and without `AddUnitImages` / `AddRentAmount` the unit, lease and rental request queries fail on missing columns.
+> **Verify:** `AddGoogleAuth` and `AddPropertyCreatedAuditAction` were specified during development as follow-up migrations after `InitSchema`. Confirm both files exist in `src/database/migrations/` and have been applied to every environment; without the latter, inserting an audit row with action `PROPERTY_CREATED` fails with an invalid enum value error.
 >
-> **Verify:** For `AddRentalRequests`, check the generated SQL: (1) TypeORM typically alters an existing PostgreSQL enum by renaming the old type, creating a new one with all values, re-pointing the column with `USING ...::text::new_enum`, and dropping the old type — confirm this is what was produced for `notifications.type` and `audit_logs.action` and that no other table is touched; (2) `leases` must show no dropped or altered constraints (especially the `EXCLUDE` constraint and the partial unique index).
->
-> **Verify:** For `AddRentAmount`, a `NOT NULL` `rentAmount` column added to a table that already holds rows needs a default or a backfill (for example from `units.rentAmount`), otherwise the migration fails. Confirm the exact type, precision and nullability match the final entities.
->
-> **Verify:** Deleting a unit that has leases or rental requests triggers PostgreSQL error `23503` (foreign key violation). Only `23P01` and `23505` are documented as mapped to `409` by `AllExceptionsFilter`; confirm whether `23503` is also mapped (to `409`) or surfaces as a generic `500`, and whether `UnitsService.remove` checks for dependents first.
+> **Verify:** `AddRentalRequests` has not been generated or run at the time of writing. When it is generated, check the SQL before running it: (1) `TypeORM` typically alters an existing PostgreSQL enum by renaming the old type, creating a new one with all values, re-pointing the column with `USING ...::text::new_enum`, and dropping the old type — confirm this is what was produced for `notifications.type` and `audit_logs.action` and that no other table is touched; (2) `leases` must show no dropped or altered constraints (especially the `EXCLUDE` constraint and the partial unique index); (3) a `NOT NULL` `rentAmount` column added to `units` or `leases` needs a default or a backfill if those tables already hold rows, otherwise the migration fails; (4) confirm the exact `rentAmount` type/precision and nullability match the final entities.
 
 ## Entity-relationship diagram
 
@@ -157,11 +152,9 @@ erDiagram
         uuid id PK
         uuid propertyId FK
         varchar unitNumber
-        varchar building
         numeric area
-        numeric rentAmount
+        int rentAmount
         varchar status
-        jsonb images
     }
     LEASES {
         uuid id PK
@@ -169,7 +162,7 @@ erDiagram
         uuid tenantId FK
         date startDate
         date endDate
-        numeric rentAmount
+        int rentAmount
         varchar status
     }
     RENTAL_REQUESTS {
@@ -178,7 +171,7 @@ erDiagram
         uuid tenantId FK
         date startDate
         date endDate
-        numeric rentAmount
+        int rentAmount
         text message "nullable"
         varchar status
     }

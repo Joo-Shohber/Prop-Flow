@@ -32,21 +32,13 @@ import { ListRentalRequestsQueryDto } from './dto/list-rental-requests-query.dto
 import { RentalRequestResponseDto } from './dto/rental-request-response.dto.js';
 import { RentalRequest } from './entities/rental-request.entity.js';
 import { RentalRequestStatus } from './enums/rental-request-status.enum.js';
+import { assertValidDateRange, todayIso } from '../common/utils/date.util.js';
 
 const RENTAL_REQUEST_SORT_FIELDS = [
   'createdAt',
   'startDate',
   'endDate',
 ] as const;
-
-/** True for a real calendar date in YYYY-MM-DD form. */
-function isRealDate(value: string): boolean {
-  const date = new Date(`${value}T00:00:00Z`);
-
-  return (
-    !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
-  );
-}
 
 @Injectable()
 export class RentalRequestsService {
@@ -70,12 +62,7 @@ export class RentalRequestsService {
   private async findOne(id: string): Promise<RentalRequest> {
     const request = await this.requestRepo.findOne({
       where: { id },
-      relations: {
-        tenant: true,
-        unit: {
-          property: true,
-        },
-      },
+      relations: { tenant: true, unit: { property: true } },
     });
 
     if (!request?.unit?.property) {
@@ -174,7 +161,7 @@ export class RentalRequestsService {
    * @param dto - Rental request data.
    * @param ip - The IP address of the user performing the action.
    * @returns The created rental request.
-   * @throws BadRequestException If the dates are invalid.
+   * @throws BadRequestException If the dates are invalid or endDate is in the past.
    * @throws NotFoundException If the unit does not exist.
    * @throws ConflictException If the unit is not AVAILABLE or the dates
    * overlap an existing PENDING/ACTIVE lease.
@@ -186,7 +173,11 @@ export class RentalRequestsService {
   ): Promise<RentalRequestResponseDto> {
     await this.leaseExpiration.run();
 
-    this.assertValidDateRange(dto.startDate, dto.endDate);
+    assertValidDateRange(dto.startDate, dto.endDate);
+
+    if (dto.endDate < todayIso()) {
+      throw new BadRequestException('endDate must not be in the past');
+    }
 
     const unit = await this.unitRepo.findOne({
       where: {
@@ -197,7 +188,7 @@ export class RentalRequestsService {
       },
     });
 
-    if (!unit?.property || unit.property.deletedAt) {
+    if (!unit?.property) {
       throw new NotFoundException('Unit not found');
     }
 
@@ -270,9 +261,9 @@ export class RentalRequestsService {
    * @returns The approved rental request.
    * @throws NotFoundException If the request, unit or property does not exist.
    * @throws ForbiddenException If the actor cannot manage the property.
-   * @throws ConflictException If the request is not PENDING, the unit is not
-   * AVAILABLE, the tenant is no longer an active TENANT, or the dates conflict
-   * with another lease.
+   * @throws ConflictException If the request is not PENDING, its period has
+   * already ended, the unit is not AVAILABLE, the tenant is no longer an
+   * active TENANT, or the dates conflict with another lease.
    */
   async approve(
     actor: User,
@@ -289,6 +280,10 @@ export class RentalRequestsService {
         throw new ConflictException(
           'Only a PENDING rental request can be approved',
         );
+      }
+
+      if (request.endDate < todayIso()) {
+        throw new ConflictException('The requested period has already ended');
       }
 
       const lockedUnit = await manager
@@ -503,21 +498,5 @@ export class RentalRequestsService {
         startDate,
       })
       .getExists();
-  }
-
-  /**
-   * Validates that both dates are real calendar dates and that
-   * startDate comes before endDate.
-   */
-  private assertValidDateRange(startDate: string, endDate: string): void {
-    if (!isRealDate(startDate) || !isRealDate(endDate)) {
-      throw new BadRequestException(
-        'startDate and endDate must be valid dates',
-      );
-    }
-
-    if (startDate >= endDate) {
-      throw new BadRequestException('startDate must be before endDate');
-    }
   }
 }

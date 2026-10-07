@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsEnum,
   IsNotEmpty,
@@ -7,9 +7,11 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
 import { trim } from '../../common/utils/transform.util.js';
 import { PropertyType } from '../enums/property-type.enum.js';
+import { InitialUnitDto } from './initial-unit.dto.js';
 
 export class CreatePropertyDto {
   @ApiProperty({ maxLength: 150 })
@@ -43,12 +45,12 @@ export class CreatePropertyDto {
   @MaxLength(100)
   city: string;
 
-  @ApiProperty({ maxLength: 100 })
+  @ApiPropertyOptional({ maxLength: 100 })
   @Transform(trim)
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @MaxLength(100)
-  country: string;
+  country?: string;
 
   @ApiPropertyOptional({
     description:
@@ -57,4 +59,14 @@ export class CreatePropertyDto {
   @IsOptional()
   @IsUUID()
   ownerId?: string;
+
+  @ApiPropertyOptional({
+    type: () => InitialUnitDto,
+    description:
+      'Optional first unit, created with the property in one transaction (used for single-unit types).',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => InitialUnitDto)
+  unit?: InitialUnitDto;
 }

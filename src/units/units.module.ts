@@ -7,6 +7,7 @@ import { UnitsService } from './units.service.js';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module.js';
 import { RedisModule } from '../common/redis/redis.module.js';
 import { CacheInvalidationModule } from '../common/cache/cache-invalidation.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { CacheInvalidationModule } from '../common/cache/cache-invalidation.modu
     PropertiesModule,
     AuditLogsModule,
     CacheInvalidationModule,
+    NotificationsModule,
   ],
   controllers: [UnitsController],
   providers: [UnitsService],

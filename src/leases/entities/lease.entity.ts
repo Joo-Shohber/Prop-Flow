@@ -16,11 +16,11 @@ import { LeaseStatus } from '../enums/lease-status.enum.js';
 
 @Entity('leases')
 @Check(`"startDate" < "endDate"`)
+// There are no overlapping leases for the same unit when the lease status is either PENDING or ACTIVE.
 @Exclusion(
   `USING gist ("unitId" WITH =, daterange("startDate", "endDate", '[]') WITH &&)
   WHERE (status IN ('PENDING', 'ACTIVE'))`,
 )
-// At most one ACTIVE lease per unit at any time.
 @Index(['unitId'], { unique: true, where: `status = 'ACTIVE'` })
 @Index(['status', 'endDate'])
 export class Lease {

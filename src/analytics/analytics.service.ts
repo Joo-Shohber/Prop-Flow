@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DASHBOARD_STATS_CACHE_TTL_SECONDS } from '../common/cache/cache.constants.js';
@@ -14,6 +14,8 @@ import { DashboardStatsDto } from './dto/dashboard-stats.dto.js';
 
 @Injectable()
 export class AnalyticsService {
+  private readonly logger = new Logger(AnalyticsService.name);
+
   constructor(
     @InjectRepository(Property)
     private readonly propertiesRepo: Repository<Property>,
@@ -40,17 +42,31 @@ export class AnalyticsService {
 
     const scope = actor.role === UserRole.ADMIN ? 'admin' : actor.id;
     const cacheKey = `dashboard:stats:${scope}`;
-    const cached = await this.redis.getJson<DashboardStatsDto>(cacheKey);
-    if (cached) return cached;
+
+    try {
+      const cached = await this.redis.getJson<DashboardStatsDto>(cacheKey);
+      if (cached) return cached;
+    } catch (error) {
+      this.logger.warn(
+        `Dashboard cache read failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     const ownerId = actor.role === UserRole.ADMIN ? undefined : actor.id;
     const stats = await this.computeStats(ownerId);
 
-    await this.redis.setJson(
-      cacheKey,
-      stats,
-      DASHBOARD_STATS_CACHE_TTL_SECONDS,
-    );
+    try {
+      await this.redis.setJson(
+        cacheKey,
+        stats,
+        DASHBOARD_STATS_CACHE_TTL_SECONDS,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Dashboard cache write failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     return stats;
   }
 

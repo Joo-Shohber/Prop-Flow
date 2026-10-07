@@ -21,13 +21,6 @@ export class CreateUnitDto {
   @MaxLength(50)
   unitNumber: string;
 
-  @ApiProperty({ maxLength: 100, description: 'Free-text building label' })
-  @Transform(trim)
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
-  building: string;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()
@@ -51,6 +44,12 @@ export class CreateUnitDto {
   @Min(0)
   @Max(50)
   bathrooms: number;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(0)
+  @Max(2_000_000_000)
+  rentAmount: number;
 
   @ApiPropertyOptional()
   @IsOptional()

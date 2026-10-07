@@ -35,7 +35,7 @@ export class Property {
   @Column({ type: 'varchar', length: 100 })
   city: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ type: 'varchar', length: 100, default: 'Egypt' })
   country: string;
 
   @Index()

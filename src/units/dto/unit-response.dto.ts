@@ -3,9 +3,7 @@ import { UnitStatus } from '../enums/unit-status.enum.js';
 
 class ImageRefDto {
   @ApiProperty() url: string;
-
   @ApiProperty() publicId: string;
-
   @ApiProperty() source: string;
 }
 
@@ -13,8 +11,6 @@ export class UnitResponseDto {
   @ApiProperty() id: string;
 
   @ApiProperty() unitNumber: string;
-
-  @ApiProperty() building: string;
 
   @ApiProperty({ nullable: true, type: Number }) floor: number | null;
 

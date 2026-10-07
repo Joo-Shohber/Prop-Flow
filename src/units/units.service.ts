@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -46,13 +47,15 @@ const MANUAL_TRANSITIONS: Partial<Record<UnitStatus, UnitStatus>> = {
 
 @Injectable()
 export class UnitsService {
+  private readonly logger = new Logger(UnitsService.name);
+
   constructor(
     @InjectRepository(Unit)
     private readonly unitRepo: Repository<Unit>,
     private readonly propertiesService: PropertiesService,
     private readonly leaseExpiration: LeaseExpirationService,
     private readonly auditLogsService: AuditLogsService,
-    private readonly uploads: UploadService,
+    private readonly uploadService: UploadService,
     private readonly redis: RedisService,
     private readonly cache: CacheInvalidationService,
     private readonly dataSource: DataSource,
@@ -60,6 +63,7 @@ export class UnitsService {
 
   /**
    * Retrieves a unit by its ID, including its associated property.
+   * A unit whose property was soft-deleted is treated as not found.
    * @param id - The unique ID of the unit.
    * @returns The requested unit with its property.
    * @throws NotFoundException If the unit does not exist.
@@ -76,6 +80,7 @@ export class UnitsService {
   /**
    * Retrieves a unit after verifying that the actor has permission
    * to manage the property that owns the unit.
+   * A TENANT can only see AVAILABLE units (anything else is a 404).
    * @param actor - The user requesting access.
    * @param id - The unique ID of the unit.
    * @returns The unit if the actor is authorized.
@@ -102,6 +107,8 @@ export class UnitsService {
 
   /**
    * Retrieves a paginated list of units visible to the actor.
+   * Redis is used as a best-effort cache: if it is down, the query
+   * falls back to the database instead of failing the request.
    * @param actor - The user requesting the units.
    * @param query - Filtering, sorting, and pagination parameters.
    * @returns A paginated collection of units.
@@ -113,7 +120,15 @@ export class UnitsService {
     await this.leaseExpiration.run();
 
     const cacheKey = this.buildSearchCacheKey(actor, query);
-    const cached = await this.redis.getJson<Paginated<Unit>>(cacheKey);
+
+    let cached: Paginated<Unit> | null = null;
+    try {
+      cached = await this.redis.getJson<Paginated<Unit>>(cacheKey);
+    } catch (error) {
+      this.logger.warn(
+        `Units cache read failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     if (cached) return cached;
 
     const { sortBy, sortOrder } = resolveSort(
@@ -121,6 +136,7 @@ export class UnitsService {
       UNIT_SORT_FIELDS,
       'createdAt',
     );
+
     const queryBuilder = this.unitRepo
       .createQueryBuilder('unit')
       .innerJoin('unit.property', 'property')
@@ -178,33 +194,65 @@ export class UnitsService {
       .getManyAndCount();
 
     const result = Paginated.of(data, total, query);
-    await this.redis.setJson(cacheKey, result, UNITS_SEARCH_CACHE_TTL_SECONDS);
+
+    try {
+      await this.redis.setJson(
+        cacheKey,
+        result,
+        UNITS_SEARCH_CACHE_TTL_SECONDS,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Units cache write failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     return result;
   }
 
   /**
    * Creates a new unit under a property after verifying that the actor
    * has permission to manage that property.
-   * @param actor - The user creating the unit.
-   * @param propertyId - The ID of the property that will contain the unit.
-   * @param dto - The unit creation data.
+   * @param actor The authenticated user creating the unit.
+   * @param propertyId The ID of the property that will contain the unit.
+   * @param dto The unit creation data.
+   * @param ip The user IP performing the action.
    * @returns The newly created unit.
    * @throws NotFoundException If the property does not exist.
    * @throws ForbiddenException If the actor cannot manage the property.
    */
-
   async create(
     actor: User,
     propertyId: string,
     dto: CreateUnitDto,
+    ip?: string,
   ): Promise<Unit> {
     const property = await this.propertiesService.findForActor(
       actor,
       propertyId,
     );
-    const saved = await this.unitRepo.save(
-      this.unitRepo.create({ ...dto, propertyId: property.id }),
-    );
+
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const created = manager.create(Unit, {
+        ...dto,
+        propertyId: property.id,
+      });
+      await manager.save(Unit, created);
+
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.UNIT_CREATED,
+        entity: 'Unit',
+        entityId: created.id,
+        metadata: {
+          propertyId: property.id,
+        },
+        ipAddress: ip,
+      });
+
+      return created;
+    });
+
     await this.cache.invalidateUnitsAndDashboard();
 
     return saved;
@@ -212,15 +260,19 @@ export class UnitsService {
 
   /**
    * Updates a unit after verifying that the actor has permission to manage its property.
+   * A RENTED unit cannot be updated.
    * @param actor - The user updating the unit.
    * @param id - The unique ID of the unit.
    * @param dto - The fields to update.
    * @returns The updated unit.
    * @throws NotFoundException If the unit does not exist.
    * @throws ForbiddenException If the actor cannot manage the unit.
+   * @throws ConflictException If the unit is currently RENTED.
    */
   async update(actor: User, id: string, dto: UpdateUnitDto): Promise<Unit> {
     const unit = await this.findForActor(actor, id);
+    this.assertNotRented(unit, 'updated');
+
     this.unitRepo.merge(unit, dto);
     const saved = await this.unitRepo.save(unit);
     await this.cache.invalidateUnitsAndDashboard();
@@ -229,15 +281,39 @@ export class UnitsService {
 
   /**
    * Removes a unit after verifying that the actor has permission
-   * to manage its property.
+   * to manage its property. A RENTED unit cannot be removed.
    * @param actor - The user removing the unit.
    * @param id - The unique ID of the unit.
    * @throws NotFoundException If the unit does not exist.
    * @throws ForbiddenException If the actor cannot manage the unit.
+   * @throws ConflictException If the unit is currently RENTED.
    */
-  async remove(actor: User, id: string): Promise<void> {
+  async remove(actor: User, id: string, ip?: string): Promise<void> {
     const unit = await this.findForActor(actor, id);
-    await this.unitRepo.remove(unit);
+
+    await this.dataSource.transaction(async (manager) => {
+      const currentUnit = await manager
+        .createQueryBuilder(Unit, 'unit')
+        .where('unit.id = :id', { id: unit.id })
+        .setLock('pessimistic_write')
+        .getOne();
+      if (!currentUnit) {
+        throw new NotFoundException('Unit not found');
+      }
+
+      this.assertNotRented(currentUnit, 'removed');
+
+      await manager.remove(Unit, currentUnit);
+
+      await this.auditLogsService.record(manager, {
+        userId: actor.id,
+        action: AuditAction.UNIT_DELETED,
+        entity: 'Unit',
+        entityId: unit.id,
+        ipAddress: ip,
+      });
+    });
+
     await this.cache.invalidateUnitsAndDashboard();
   }
 
@@ -251,7 +327,7 @@ export class UnitsService {
    * @returns The unit with its updated status.
    * @throws NotFoundException If the unit does not exist.
    * @throws ForbiddenException If the actor cannot manage the unit.
-   * @throws BadRequestException If the current status is RENTED or the
+   * @throws ConflictException If the current status is RENTED or the
    * requested transition is not allowed.
    */
   async setStatus(
@@ -263,12 +339,12 @@ export class UnitsService {
     const unit = await this.findForActor(actor, id);
 
     if (unit.status === UnitStatus.RENTED) {
-      throw new BadRequestException(
+      throw new ConflictException(
         'A rented unit can only change status through the lease flow',
       );
     }
     if (MANUAL_TRANSITIONS[unit.status] !== status) {
-      throw new BadRequestException(
+      throw new ConflictException(
         `Cannot change status from ${unit.status} to ${status}`,
       );
     }
@@ -278,6 +354,7 @@ export class UnitsService {
 
     const saved = await this.dataSource.transaction(async (manager) => {
       const result = await manager.save(unit);
+
       await this.auditLogsService.record(manager, {
         userId: actor.id,
         action: AuditAction.UNIT_STATUS_CHANGED,
@@ -293,44 +370,99 @@ export class UnitsService {
     return saved;
   }
 
+  /**
+   * Adds images to a unit. Images may be changed even while the unit is RENTED.
+   * @param actor - The user uploading the images.
+   * @param id - The unique ID of the unit.
+   * @param files - The images to upload.
+   * @returns The updated unit.
+   * @throws BadRequestException If no file was sent.
+   * @throws ConflictException If the image limit would be exceeded.
+   */
   async addImages(
     actor: User,
     id: string,
     files: Express.Multer.File[],
   ): Promise<Unit> {
     const unit = await this.findForActor(actor, id);
+
+    if (!files?.length) {
+      throw new BadRequestException('At least one image is required');
+    }
     if (unit.images.length + files.length > UNIT_MAX_IMAGES) {
       throw new ConflictException(
         `A unit can have at most ${UNIT_MAX_IMAGES} images`,
       );
     }
 
-    const uploaded = await this.uploads.uploadImages(
+    const uploaded = await this.uploadService.uploadImages(
       files,
       'propflow/units',
       UNIT_MAX_IMAGES,
     );
     unit.images = [...unit.images, ...uploaded];
-    const saved = await this.unitRepo.save(unit);
+
+    let saved: Unit;
+
+    try {
+      saved = await this.unitRepo.save(unit);
+    } catch (error) {
+      try {
+        await this.uploadService.deleteImages(uploaded);
+      } catch {}
+
+      throw error;
+    }
+
     await this.cache.invalidateUnitsAndDashboard();
+
     return saved;
   }
 
+  /**
+   * Removes an image from a unit. Images may be changed even while the unit is RENTED.
+   * @param actor - The user removing the image.
+   * @param id - The unique ID of the unit.
+   * @param publicId - The Cloudinary publicId of the image to remove.
+   * @returns The updated unit.
+   * @throws NotFoundException If the unit or the image does not exist.
+   * @throws ForbiddenException If the actor does not have access to it.
+   */
   async removeImage(actor: User, id: string, publicId: string): Promise<Unit> {
     const unit = await this.findForActor(actor, id);
     const image = unit.images.find((img) => img.publicId === publicId);
     if (!image) throw new NotFoundException('Image not found on this unit');
 
-    await this.uploads.deleteImages([image]);
+    const originalImages = unit.images;
     unit.images = unit.images.filter((img) => img.publicId !== publicId);
-    const saved = await this.unitRepo.save(unit);
+
+    let saved: Unit;
+
+    try {
+      saved = await this.unitRepo.save(unit);
+    } catch (error) {
+      unit.images = originalImages;
+      throw error;
+    }
+
+    try {
+      await this.uploadService.deleteImages([image]);
+    } catch {
+      // Cloudinary cleanup can be retried later, The database is already the source of truth.
+    }
+
     await this.cache.invalidateUnitsAndDashboard();
+
     return saved;
   }
 
+  private assertNotRented(unit: Unit, action: 'updated' | 'removed'): void {
+    if (unit.status === UnitStatus.RENTED) {
+      throw new ConflictException(`A rented unit cannot be ${action}`);
+    }
+  }
+
   private buildSearchCacheKey(actor: User, query: ListUnitsQueryDto): string {
-    // Every tenant sees the exact same AVAILABLE-only view for a given query,
-    // so they share one cache bucket instead of one per tenant id.
     const scope =
       actor.role === UserRole.ADMIN
         ? 'admin'

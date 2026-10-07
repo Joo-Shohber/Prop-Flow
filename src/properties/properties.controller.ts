@@ -12,6 +12,7 @@ import {
   Query,
   UploadedFiles,
   UseInterceptors,
+  Req,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import {
@@ -26,6 +27,7 @@ import {
   ApiOperation,
   ApiTags,
   ApiUnauthorizedResponse,
+  getSchemaPath,
 } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
@@ -43,9 +45,11 @@ import { UpdatePropertyDto } from './dto/update-property.dto.js';
 import { Property } from './entities/property.entity.js';
 import { PropertiesService } from './properties.service.js';
 import { DeleteImageDto } from '../common/uploads/dto/delete-image.dto.js';
-import { Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { PropertyWithUnitsResponseDto } from './dto/property-with-units-response.dto.js';
+
+const READ_ROLES = [UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN] as const;
+const MANAGE_ROLES = [UserRole.OWNER, UserRole.ADMIN] as const;
 
 @ApiTags('Properties')
 @ApiBearerAuth()
@@ -57,9 +61,9 @@ export class PropertiesController {
   constructor(private readonly properties: PropertiesService) {}
 
   @Get()
-  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...READ_ROLES)
   @ApiOperation({
-    summary: 'List properties (TENANT: all, OWNER: own only, ADMIN: all)',
+    summary: 'List properties (OWNER: own only, TENANT and ADMIN: all)',
   })
   @ApiOkResponse({
     type: PropertyResponseDto,
@@ -71,7 +75,7 @@ export class PropertiesController {
   }
 
   @Post()
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({
     summary: 'Create a property (owner = self; ADMIN may set ownerId)',
   })
@@ -85,11 +89,18 @@ export class PropertiesController {
   }
 
   @Get(':id')
-  @Roles(UserRole.TENANT, UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...READ_ROLES)
   @ApiOperation({
     summary: 'Get a property',
   })
-  @ApiOkResponse({ type: PropertyWithUnitsResponseDto })
+  @ApiOkResponse({
+    schema: {
+      oneOf: [
+        { $ref: getSchemaPath(PropertyResponseDto) },
+        { $ref: getSchemaPath(PropertyWithUnitsResponseDto) },
+      ],
+    },
+  })
   @ApiForbiddenResponse({
     description: 'Not allowed to access this property',
   })
@@ -101,7 +112,7 @@ export class PropertiesController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({ summary: 'Update a property' })
   @ApiOkResponse({ type: PropertyResponseDto })
   @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })
@@ -115,7 +126,7 @@ export class PropertiesController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Soft delete a property' })
   @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })
@@ -133,7 +144,7 @@ export class PropertiesController {
   }
 
   @Post(':id/images')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({
     summary: `Upload property images (max ${PROPERTY_MAX_IMAGES}, jpeg/png/webp)`,
   })
@@ -166,7 +177,7 @@ export class PropertiesController {
   }
 
   @Delete(':id/images')
-  @Roles(UserRole.OWNER, UserRole.ADMIN)
+  @Roles(...MANAGE_ROLES)
   @ApiOperation({ summary: 'Remove a property image' })
   @ApiOkResponse({ type: PropertyResponseDto })
   @ApiForbiddenResponse({ description: 'Not the owner and not an ADMIN' })
