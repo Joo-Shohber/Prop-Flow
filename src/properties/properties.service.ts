@@ -284,46 +284,6 @@ export class PropertiesService {
         });
       }
 
-      const pendingRequests = await manager
-        .createQueryBuilder(RentalRequest, 'request')
-        .innerJoin('request.unit', 'unit')
-        .where('unit.propertyId = :propertyId', {
-          propertyId: property.id,
-        })
-        .andWhere('request.status = :status', {
-          status: RentalRequestStatus.PENDING,
-        })
-        .setLock('pessimistic_write', undefined, ['request'])
-        .getMany();
-
-      for (const request of pendingRequests) {
-        await manager.update(RentalRequest, request.id, {
-          status: RentalRequestStatus.REJECTED,
-        });
-
-        await this.notificationsService.create(manager, {
-          recipientId: request.tenantId,
-          type: NotificationType.RENTAL_REQUEST_REJECTED,
-          title: 'Rental request rejected',
-          message: `Your rental request was rejected because the property was removed.`,
-          relatedEntityType: 'RentalRequest',
-          relatedEntityId: request.id,
-        });
-
-        await this.auditLogsService.record(manager, {
-          userId: actor.id,
-          action: AuditAction.RENTAL_REQUEST_REJECTED,
-          entity: 'RentalRequest',
-          entityId: request.id,
-          metadata: {
-            reason: 'PROPERTY_DELETED',
-            propertyId: property.id,
-            unitId: request.unitId,
-          },
-          ipAddress: ip,
-        });
-      }
-
       await manager.softDelete(Property, property.id);
 
       await this.auditLogsService.record(manager, {
