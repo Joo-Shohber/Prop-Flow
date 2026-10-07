@@ -180,12 +180,8 @@ export class RentalRequestsService {
     }
 
     const unit = await this.unitRepo.findOne({
-      where: {
-        id: dto.unitId,
-      },
-      relations: {
-        property: true,
-      },
+      where: { id: dto.unitId },
+      relations: { property: true },
     });
 
     if (!unit?.property) {

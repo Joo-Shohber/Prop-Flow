@@ -106,7 +106,9 @@ export class LeasesService {
 
     const queryBuilder = this.leaseRepo
       .createQueryBuilder('lease')
-      .innerJoin('lease.unit', 'unit');
+      .innerJoin('lease.unit', 'unit')
+      .innerJoin('unit.property', 'property')
+      .andWhere('property."deletedAt" IS NULL');
 
     if (actor.role === UserRole.TENANT) {
       queryBuilder.andWhere('lease.tenantId = :selfId', { selfId: actor.id });

@@ -81,22 +81,17 @@ export class PropertiesService {
   async findForActor(actor: User, id: string) {
     const property = await this.findOne(id);
 
-    if (actor.role !== UserRole.TENANT) {
-      if (!canManageProperty(actor, property)) {
-        throw new ForbiddenException('You do not have access to this property');
-      }
-
-      return property;
+    if (actor.role === UserRole.TENANT) {
+      const units = await this.unitsRepo.find({
+        where: { propertyId: property.id, status: UnitStatus.AVAILABLE },
+      });
+      return { ...property, units };
     }
 
-    const units = await this.unitsRepo.find({
-      where: {
-        propertyId: property.id,
-        status: UnitStatus.AVAILABLE,
-      },
-    });
-
-    return { ...property, units };
+    if (!canManageProperty(actor, property)) {
+      throw new ForbiddenException('You do not have access to this property');
+    }
+    return property;
   }
 
   /**
