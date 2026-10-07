@@ -67,7 +67,7 @@ export class MaintenanceService {
       where: { id },
       relations: { unit: { property: true } },
     });
-    if (!maintenance)
+    if (!maintenance?.unit?.property)
       throw new NotFoundException('Maintenance request not found');
     return maintenance;
   }
@@ -571,8 +571,71 @@ export class MaintenanceService {
   }
 
   /**
+   * Adds images to an OPEN maintenance request.
+   * @param actor - Authenticated user performing the action.
+   * @param id - Maintenance request ID.
+   * @param files - Images to upload.
+   * @returns The updated maintenance request.
+   * @throws BadRequestException If no file was sent.
+   * @throws ForbiddenException If the actor cannot modify the request.
+   * @throws ConflictException If the request is not OPEN or the image limit would be exceeded.
+   */
+  async addImages(
+    actor: User,
+    id: string,
+    files: Express.Multer.File[],
+  ): Promise<MaintenanceRequest> {
+    const request = await this.findForActor(actor, id);
+
+    if (!canCloseOrCancelMaintenance(actor, request)) {
+      throw new ForbiddenException(
+        'You do not have access to this maintenance request',
+      );
+    }
+
+    if (request.status !== MaintenanceStatus.OPEN) {
+      throw new ConflictException(
+        'Images can only be added while the request is OPEN',
+      );
+    }
+
+    if (!files?.length) {
+      throw new BadRequestException('At least one image is required');
+    }
+
+    if (request.images.length + files.length > MAINTENANCE_MAX_IMAGES) {
+      throw new ConflictException(
+        `A request can have at most ${MAINTENANCE_MAX_IMAGES} images`,
+      );
+    }
+
+    const uploaded = await this.uploadService.uploadImages(
+      files,
+      'propflow/maintenance',
+      MAINTENANCE_MAX_IMAGES,
+    );
+
+    request.images = [...request.images, ...uploaded];
+
+    let saved: MaintenanceRequest;
+
+    try {
+      saved = await this.maintenanceRepo.save(request);
+    } catch (error) {
+      try {
+        await this.uploadService.deleteImages(uploaded);
+      } catch {}
+
+      throw error;
+    }
+
+    await this.cache.invalidateDashboard();
+
+    return saved;
+  }
+
+  /**
    * Removes an image from an OPEN maintenance request.
-   * The image is deleted from the external upload provider before the updated request is persisted.
    * @param actor - Authenticated user performing the action.
    * @param id - Maintenance request ID.
    * @param publicId - Public ID of the image to remove.
@@ -600,20 +663,26 @@ export class MaintenanceService {
       );
     }
 
-    const imagePublicId = maintenance.images.find(
-      (img) => img.publicId === publicId,
-    );
+    const image = maintenance.images.find((img) => img.publicId === publicId);
+    if (!image) throw new NotFoundException('Image not found on this request');
 
-    if (!imagePublicId)
-      throw new NotFoundException('Image not found on this request');
-
-    await this.uploadService.deleteImages([imagePublicId]);
-
+    const originalImages = maintenance.images;
     maintenance.images = maintenance.images.filter(
       (img) => img.publicId !== publicId,
     );
 
-    const saved = await this.maintenanceRepo.save(maintenance);
+    let saved: MaintenanceRequest;
+
+    try {
+      saved = await this.maintenanceRepo.save(maintenance);
+    } catch (error) {
+      maintenance.images = originalImages;
+      throw error;
+    }
+
+    try {
+      await this.uploadService.deleteImages([image]);
+    } catch {}
 
     await this.cache.invalidateDashboard();
 
@@ -650,56 +719,29 @@ export class MaintenanceService {
       );
     }
 
-    const imagePublicId = maintenance.completionImages.find(
+    const image = maintenance.completionImages.find(
       (img) => img.publicId === publicId,
     );
+    if (!image) throw new NotFoundException('Image not found on this request');
 
-    if (!imagePublicId)
-      throw new NotFoundException('Image not found on this request');
-
-    await this.uploadService.deleteImages([imagePublicId]);
-
+    const originalImages = maintenance.completionImages;
     maintenance.completionImages = maintenance.completionImages.filter(
       (img) => img.publicId !== publicId,
     );
 
-    const saved = await this.maintenanceRepo.save(maintenance);
+    let saved: MaintenanceRequest;
 
-    // await this.cache.invalidateDashboard();
-
-    return saved;
-  }
-
-  async addImages(
-    actor: User,
-    id: string,
-    files: Express.Multer.File[],
-  ): Promise<MaintenanceRequest> {
-    const request = await this.findForActor(actor, id);
-    if (!canCloseOrCancelMaintenance(actor, request)) {
-      throw new ForbiddenException(
-        'You do not have access to this maintenance request',
-      );
-    }
-    if (request.status !== MaintenanceStatus.OPEN) {
-      throw new ConflictException(
-        'Images can only be added while the request is OPEN',
-      );
-    }
-    if (request.images.length + files.length > MAINTENANCE_MAX_IMAGES) {
-      throw new ConflictException(
-        `A request can have at most ${MAINTENANCE_MAX_IMAGES} images`,
-      );
+    try {
+      saved = await this.maintenanceRepo.save(maintenance);
+    } catch (error) {
+      maintenance.completionImages = originalImages;
+      throw error;
     }
 
-    const uploaded = await this.uploadService.uploadImages(
-      files,
-      'propflow/maintenance',
-      MAINTENANCE_MAX_IMAGES,
-    );
-    request.images = [...request.images, ...uploaded];
-    const saved = await this.maintenanceRepo.save(request);
-    await this.cache.invalidateDashboard();
+    try {
+      await this.uploadService.deleteImages([image]);
+    } catch {}
+
     return saved;
   }
 
