@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import {
   Paginated,
   resolveSort,
@@ -32,6 +32,9 @@ import { UNITS_SEARCH_CACHE_TTL_SECONDS } from '../common/cache/cache.constants.
 import { RedisService } from '../common/redis/redis.service.js';
 import { UploadService } from '../common/uploads/upload.service.js';
 import { UNIT_MAX_IMAGES } from '../common/uploads/upload.constants.js';
+import { Lease } from '../leases/entities/lease.entity.js';
+import { RentalRequest } from '../rental-requests/entities/rental-request.entity.js';
+import { MaintenanceRequest } from '../maintenance/entities/maintenance-request.entity.js';
 
 const UNIT_SORT_FIELDS = [
   'createdAt',
@@ -281,12 +284,15 @@ export class UnitsService {
 
   /**
    * Removes a unit after verifying that the actor has permission
-   * to manage its property. A RENTED unit cannot be removed.
+   * to manage its property. A RENTED unit cannot be removed, and a unit
+   * with any lease, rental request, or maintenance request history cannot
+   * be removed either (the database FKs are RESTRICT on purpose — this
+   * check exists only to surface a clear reason instead of a raw FK error).
    * @param actor - The user removing the unit.
    * @param id - The unique ID of the unit.
    * @throws NotFoundException If the unit does not exist.
    * @throws ForbiddenException If the actor cannot manage the unit.
-   * @throws ConflictException If the unit is currently RENTED.
+   * @throws ConflictException If the unit is RENTED or has any history.
    */
   async remove(actor: User, id: string, ip?: string): Promise<void> {
     const unit = await this.findForActor(actor, id);
@@ -302,6 +308,7 @@ export class UnitsService {
       }
 
       this.assertNotRented(currentUnit, 'removed');
+      await this.assertNoHistory(manager, currentUnit.id);
 
       await manager.remove(Unit, currentUnit);
 
@@ -490,5 +497,42 @@ export class UnitsService {
       .update(JSON.stringify(canonical))
       .digest('hex');
     return `units:search:${hash}`;
+  }
+
+  /**
+   * The Unit -> Lease / RentalRequest / MaintenanceRequest foreign keys are
+   * RESTRICT at the database level — this check exists purely so the client
+   * gets a specific reason instead of a generic 409 from a raw FK violation.
+   * A race between this check and the actual delete is still caught by the
+   * database constraint itself.
+   */
+  private async assertNoHistory(
+    manager: EntityManager,
+    unitId: string,
+  ): Promise<void> {
+    const leaseCount = await manager.count(Lease, { where: { unitId } });
+    if (leaseCount > 0) {
+      throw new ConflictException(
+        'Cannot delete a unit that has lease history',
+      );
+    }
+
+    const rentalRequestCount = await manager.count(RentalRequest, {
+      where: { unitId },
+    });
+    if (rentalRequestCount > 0) {
+      throw new ConflictException(
+        'Cannot delete a unit that has rental request history',
+      );
+    }
+
+    const maintenanceCount = await manager.count(MaintenanceRequest, {
+      where: { unitId },
+    });
+    if (maintenanceCount > 0) {
+      throw new ConflictException(
+        'Cannot delete a unit that has maintenance request history',
+      );
+    }
   }
 }

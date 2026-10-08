@@ -36,7 +36,7 @@ Property & Rental Management API. NestJS (ESM) + PostgreSQL/TypeORM + Redis. Bui
 | `class-validator`, `class-transformer`                       | DTO validation/transformation                                                                                                  |
 | `@nestjs/swagger`                                            | OpenAPI docs at `/api/docs`                                                                                                    |
 | `@nestjs/jwt`                                                | Access + refresh token signing/verification                                                                                    |
-| `bcrypt`                                                     | Password hashing (native binding, SHA-256 pre-hashed to use the full password, not just the first 72 bytes)                    |
+| `bcrypt`                                                     | Password hashing (12 rounds, native binding, SHA-256 pre-hashed to use the full password, not just the first 72 bytes)         |
 | `nodemailer`, `ejs`                                          | OTP emails, HTML templates (called directly — no wrapper library)                                                              |
 | `@nestjs/platform-express` (Multer integration), `multer`    | Multipart file uploads                                                                                                         |
 | `file-type`                                                  | Magic-byte image validation (rejects spoofed extensions/MIME types)                                                            |
@@ -94,7 +94,7 @@ Client (Web / Mobile / Swagger)
                LeaseExpirationService . CacheInvalidationService . RedisThrottlerStorage
         |
         v
- ResponseInterceptor (wraps { success, data, meta }) / AllExceptionsFilter (maps DB errors -> HTTP)
+ LoggingInterceptor -> ResponseInterceptor (wraps { success, data, meta }) / AllExceptionsFilter (maps DB errors -> HTTP)
         |
         v
  PostgreSQL  .  Redis  .  Cloudinary  .  SMTP provider  .  Google OAuth
@@ -106,19 +106,19 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 
 ### `users`
 
-| Column                   | Type                                              | Notes                                              |
-| ------------------------ | ------------------------------------------------- | -------------------------------------------------- |
-| `id`                     | uuid PK                                           |                                                    |
-| `email`                  | varchar(255)                                      | unique                                             |
-| `passwordHash`           | varchar(255), nullable                            | `select: false`; nullable for Google-only accounts |
-| `firstName`, `lastName`  | varchar(100)                                      |                                                    |
-| `phone`                  | varchar(30), nullable                             |                                                    |
-| `role`                   | enum `TENANT / OWNER / MAINTENANCE_STAFF / ADMIN` | default `TENANT`                                   |
-| `isActive`               | boolean                                           | default `true`                                     |
-| `isEmailVerified`        | boolean                                           | default `false`                                    |
-| `avatar`                 | jsonb `{url, publicId}`, nullable                 |                                                    |
-| `googleId`               | varchar(255), nullable                            | unique                                             |
-| `createdAt`, `updatedAt` | timestamptz                                       |                                                    |
+| Column                   | Type                                              | Notes                                                                                                                                                           |
+| ------------------------ | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                     | uuid PK                                           |                                                                                                                                                                 |
+| `email`                  | varchar(255)                                      | unique                                                                                                                                                          |
+| `passwordHash`           | varchar(255), nullable                            | `select: false`; nullable for Google-only accounts                                                                                                              |
+| `firstName`, `lastName`  | varchar(100)                                      |                                                                                                                                                                 |
+| `phone`                  | varchar(30), nullable                             |                                                                                                                                                                 |
+| `role`                   | enum `TENANT / OWNER / MAINTENANCE_STAFF / ADMIN` | default `TENANT`                                                                                                                                                |
+| `isActive`               | boolean                                           | default `true`                                                                                                                                                  |
+| `isEmailVerified`        | boolean                                           | default `false`                                                                                                                                                 |
+| `avatar`                 | jsonb `{url, publicId, source}`                   | not nullable; defaults to a placeholder image (`publicId: "null"`, `source: "default"`), so a user without an uploaded picture still gets a valid avatar object |
+| `googleId`               | varchar(255), nullable                            | unique                                                                                                                                                          |
+| `createdAt`, `updatedAt` | timestamptz                                       |                                                                                                                                                                 |
 
 ### `refresh_tokens`
 
@@ -187,22 +187,22 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 
 ### `rental_requests`
 
-| Column                   | Type                                                 | Notes                                                         |
-| ------------------------ | ---------------------------------------------------- | ------------------------------------------------------------- |
-| `id`                     | uuid PK                                              |                                                               |
-| `tenantId`               | uuid FK -> users, `RESTRICT`                         | indexed — always the authenticated tenant, never client input |
-| `unitId`                 | uuid FK -> units, `RESTRICT`                         | indexed; the property is reached through `unit -> property`   |
-| `startDate`, `endDate`   | date                                                 | same format/semantics as leases                               |
-| `rentAmount`             | integer                                              | snapshot of the unit's `rentAmount` at request time           |
-| `message`                | text, nullable                                       | max 1000 characters                                           |
-| `status`                 | enum `PENDING / APPROVED / REJECTED`                 | default `PENDING`, indexed                                    |
-| `createdAt`, `updatedAt` | timestamptz                                          |                                                               |
-| —                        | `CHECK (startDate < endDate)`                        |                                                               |
-| —                        | `UNIQUE (tenantId, unitId) WHERE status = 'PENDING'` | one pending rental request per tenant per unit                |
+| Column                   | Type                                                 | Notes                                                                                     |
+| ------------------------ | ---------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `id`                     | uuid PK                                              |                                                                                           |
+| `tenantId`               | uuid FK -> users, `RESTRICT`                         | indexed — always the authenticated tenant, never client input                             |
+| `unitId`                 | uuid FK -> units, `RESTRICT`                         | indexed; the property is reached through `unit -> property`                               |
+| `startDate`, `endDate`   | date                                                 | same format/semantics as leases                                                           |
+| `rentAmount`             | integer                                              | snapshot of the unit's `rentAmount` at request time                                       |
+| `message`                | text, nullable                                       | max 1000 characters                                                                       |
+| `status`                 | enum `PENDING / APPROVED / REJECTED`                 | default `PENDING`, indexed                                                                |
+| `createdAt`, `updatedAt` | timestamptz                                          |                                                                                           |
+| —                        | `CHECK (startDate < endDate)`                        |                                                                                           |
+| —                        | `UNIQUE (tenantId, unitId) WHERE status = 'PENDING'` | only one PENDING rental request per tenant per unit; REJECTED requests can be resubmitted |
 
 No overlap constraint on this table by design. A request does not reserve a unit, so different tenants may have pending requests for the same unit and dates. Conflicts are resolved at approval time by the `leases` constraints above.
 
-A **single tenant**, however, can have at most one rental request per unit **while the request is `PENDING`**: `UNIQUE (tenantId, unitId) WHERE status = 'PENDING'` enforces this in the database, and the service checks first so the tenant gets a friendly `409` instead of a raw constraint error. Once a request is `REJECTED`, the tenant may submit a new request for the same unit.
+A **single tenant**, however, can only ever have one rental request per unit — including after it was `REJECTED`. There is no pre-check in the service: the second insert violates `UNIQUE (tenantId, unitId)` and `AllExceptionsFilter` maps the Postgres `23505` error to a generic `409` ("A record with the same unique value already exists").
 
 ### `maintenance_requests`
 
@@ -263,7 +263,7 @@ A **single tenant**, however, can have at most one rental request per unit **whi
 | `ipAddress` | varchar(45), nullable                                                                                                                                                                                                                                                                                                |                                                                                                     |
 | `createdAt` | timestamptz                                                                                                                                                                                                                                                                                                          |                                                                                                     |
 
-Two Postgres extensions required (auto-installed by TypeORM on connect, and also created explicitly in the initial migration): `uuid-ossp` and `btree_gist`.
+Two Postgres extensions are needed: `uuid-ossp` (for `uuid_generate_v4()`) and `btree_gist` (for the lease exclusion constraint). They are **not** created by the migrations — TypeORM installs them on connect, which requires a database role allowed to run `CREATE EXTENSION`. On managed databases where that isn't allowed, create them manually before running the migrations.
 
 ## Business rules in full
 
@@ -272,7 +272,7 @@ Two Postgres extensions required (auto-installed by TypeORM on connect, and also
 ```
 AVAILABLE <-> MAINTENANCE   manual, via PATCH /units/:id/status
      |
-   RENTED                   only ever set by Lease activate / clearedعد by terminate or expiration
+   RENTED                   only ever set by Lease activate / cleared by terminate or expiration
 ```
 
 A rented unit rejects any manual status change with `409`, and cannot be updated or removed (`409`); its images can still be changed. A unit stays `AVAILABLE` while it only has `PENDING` leases (including one created by approving a rental request); it becomes `RENTED` only when a lease is activated.
@@ -295,10 +295,10 @@ PENDING -> ACTIVE -> EXPIRED   (automatic)
 ```
 
 - A lease can be created two ways: directly (`POST /leases`, by OWNER/ADMIN) or by approving a rental request (`POST /rental-requests/:id/approve`). Both produce a `PENDING` lease with `rentAmount` snapshotted from the unit (direct creation) or carried over from the approved request, and both go through the same lifecycle afterward.
-- Creating a lease never checks unit availability beyond the exclusion constraint.
+- **Direct creation** (`POST /leases`) validates `startDate < endDate` (`400`), requires `tenantId` to be an **active user with the `TENANT` role** (`400`), checks the actor can manage the unit, then — inside a transaction that locks the unit row (`pessimistic_write`) — requires the unit to be `AVAILABLE` (`409`). The exclusion constraint is the final guard against overlapping `PENDING`/`ACTIVE` leases.
 - **Activation** locks both the lease and the unit row (`pessimistic_write`), requires `PENDING` + `AVAILABLE`, then sets lease -> `ACTIVE` and unit -> `RENTED`, atomically.
 - **Termination** works from `PENDING` or `ACTIVE`; if it was `ACTIVE`, the unit goes back to `AVAILABLE`. A property's `PENDING` leases are also terminated automatically when the property is deleted.
-- **Expiration is lazy, not scheduled** — a set-based transaction runs before every lease/unit/rental-request read or write.
+- **Expiration is lazy, not scheduled** — there is no cron job. A single set-based statement moves every `ACTIVE` lease whose `endDate` is before today to `EXPIRED` and releases its unit back to `AVAILABLE` (only if the unit is still `RENTED`). It runs before lease, unit and rental-request operations and before the analytics dashboard is computed. Only `ACTIVE` leases expire; a `PENDING` lease whose dates have passed stays `PENDING` until it is terminated.
 - Only a `PENDING` lease can be edited; the exclusion constraint re-validates on that update too.
 
 ### Rental request state machine
@@ -323,7 +323,7 @@ OWNER / ADMIN
 ```
 
 - **Discovery**: a tenant finds rentable units through `GET /properties` (all properties) and `GET /properties/:id` (that property plus its `AVAILABLE` units only), or directly through `GET /units` (cross-property, `AVAILABLE`-only, filterable by `bedrooms`/`minArea`/`maxArea`/`minPrice`/`maxPrice`/`propertyId`) and `GET /units/:id` (a single `AVAILABLE` unit; a non-`AVAILABLE` unit returns `404` to a `TENANT`, not `403` — this is a deliberate enumeration-safety choice, not a bug: it avoids confirming that a specific unit exists but is rented).
-- **Create**: `TENANT` only. `tenantId`/`status` in the body are rejected (`400`) by `whitelist`+`forbidNonWhitelisted`, not silently dropped. The backend re-verifies everything regardless of what the UI showed: the unit exists and its property is not soft-deleted, the unit is `AVAILABLE`, the tenant has no earlier request for this unit (`409` — one request per tenant per unit, whatever its status), dates are valid (`startDate < endDate`), `endDate` is not in the past (`400`), and the range doesn't overlap a `PENDING`/`ACTIVE` lease. The unit's `rentAmount` is snapshotted. The owner is notified; the action is audited (`RENTAL_REQUEST_CREATED`). A request does **not** reserve the unit — different tenants may have pending requests for the same unit/dates.
+- **Create**: `TENANT` only. `tenantId`/`status` in the body are rejected (`400`) by `whitelist`+`forbidNonWhitelisted`, not silently dropped. The backend re-verifies everything regardless of what the UI showed: dates are valid (`startDate < endDate`), `endDate` is not in the past (`400`), the unit exists and its property is not soft-deleted (`404`), the unit is `AVAILABLE` (`409`), and the range doesn't overlap a `PENDING`/`ACTIVE` lease (`409`). A tenant can only ever submit one request per unit (`409` from the `UNIQUE (tenantId, unitId)` constraint, whatever the status of the earlier request). The unit's `rentAmount` is snapshotted. The owner is notified; the action is audited (`RENTAL_REQUEST_CREATED`). A request does **not** reserve the unit — different tenants may have pending requests for the same unit/dates.
 - **Approve**: OWNER (own properties) or ADMIN, in one transaction: lock the request row, authorize via `unit -> property -> ownerId`, require `PENDING` and a period that has not ended (`409`); lock the unit row (serializing concurrent approvals), require `AVAILABLE` and the tenant still an active `TENANT`; create a `PENDING` lease (tenant, unit, dates, `rentAmount` from the request); mark the request `APPROVED`; notify the tenant; audit (`RENTAL_REQUEST_APPROVED`, `metadata: {leaseId}`). Does **not** change unit status. The lease exclusion constraint is the final concurrency guard against a racing direct `POST /leases` — a constraint violation rolls the whole transaction back and the request stays `PENDING`.
 - **Reject**: OWNER (own properties) or ADMIN, `PENDING` only. Request becomes `REJECTED`; no lease; tenant notified; audited (`RENTAL_REQUEST_REJECTED`).
 - **Response shape**: besides the request fields (including the stored `rentAmount` snapshot) the response carries `tenant {id, firstName, lastName, phone}` and `unit {id, unitNumber, propertyId, rentAmount}` (the unit's current rent) so an owner can see who is asking for what before approving. Nothing else about the user or unit is exposed.
@@ -342,6 +342,10 @@ OWNER / ADMIN
 - The property is then soft-deleted and a `PROPERTY_DELETED` audit entry is written. Soft delete does not cascade: the units stay in the table but are hidden everywhere (see above), and `PENDING` rental requests on them stay `PENDING` while disappearing from every list.
 - The units and dashboard caches are invalidated after the commit.
 
+### Deleting a unit
+
+`DELETE /units/:id` is blocked (`409`) when the unit is `RENTED`, and also when it is still referenced by **any** lease, rental request or maintenance request (history is never orphaned). In practice only a unit with no history can be deleted.
+
 ### Maintenance status state machine
 
 ```
@@ -350,7 +354,7 @@ OPEN -> CANCELLED
 ASSIGNED -> CANCELLED
 ```
 
-- **Create**: TENANT only, unit derived from their own `ACTIVE` lease. Up to 5 images.
+- **Create**: TENANT only, unit derived from their own `ACTIVE` lease (`400` if they have none). Up to 5 images.
 - **Add images**: tenant (own), owner (own property), or ADMIN may add more images while the request is still `OPEN` (not just at creation) — up to the same 5-image cap, additively.
 - **Assign**: OWNER (own property) or ADMIN; target must be an active `MAINTENANCE_STAFF`; request must be `OPEN`.
 - **Start / Complete**: the assigned staff member only — not even ADMIN overrides this. `complete` requires `resolutionDescription`, accepts up to 5 completion images, sets `resolvedAt`.
@@ -359,15 +363,15 @@ ASSIGNED -> CANCELLED
 
 ### Auth
 
-- Passwords: bcrypt over a SHA-256 pre-hash.
+- Passwords: bcrypt (12 rounds) over a SHA-256 pre-hash. Login for an unknown email still runs a dummy hash verification to reduce timing differences.
 - Login blocked (`403`) until email verified, and if deactivated.
-- **Refresh rotation + reuse detection**: every refresh issues a new pair and revokes the old row; presenting an already-used token revokes the whole family. Delivered only as an httpOnly cookie.
-- **OTP**: 6-digit, HMAC-hashed in Redis, single-use, 5-attempt lockout, 60s resend cooldown. `forgot-password`/`resend-verification-otp` always return the same generic message.
-- **Google OAuth**: `GET /auth/google` redirects to Google; `GET /auth/google/callback` links/creates the account, sets the refresh cookie, and **redirects the browser to** `FRONTEND_URL` (no token in the URL — the frontend performs its normal silent `POST /auth/refresh` on load to pick up the session from the cookie).
+- **Refresh rotation + reuse detection**: every refresh issues a new pair and revokes the old row; presenting an already-used token revokes the whole family. Delivered only as an httpOnly cookie named `refresh_token`, scoped to the path `/api/v1/auth`. Logout revokes the current session's token family only; a password reset revokes **all** of the user's sessions.
+- **OTP**: 6-digit, HMAC-hashed in Redis, valid for 10 minutes, single-use, 5-attempt lockout, 60s resend cooldown. `forgot-password`/`resend-verification-otp` always return the same generic message.
+- **Google OAuth**: `GET /auth/google` redirects to Google; `GET /auth/google/callback` links/creates the account, sets the refresh cookie, and **redirects the browser to** `FRONTEND_URL` (no token in the URL — the frontend performs its normal silent `POST /auth/refresh` on load to pick up the session from the cookie). A new Google account is created as a `TENANT`.
 
 ### Uploads
 
-- Property images (max 10), unit images (max 10), maintenance request images (max 5, addable while `OPEN`) and completion images (max 5), user avatar (1) — all validated by actual file bytes via `file-type`, capped at 5 MB.
+- Property images (max 10), unit images (max 10), maintenance request images (max 5, addable while `OPEN`) and completion images (max 5), user avatar (1) — all validated by actual file bytes via `file-type` (jpeg, png, webp), capped at 5 MB.
 - Deleting an image also deletes it from Cloudinary, not just from the database array.
 
 ## Environment variables — every one, explained
@@ -376,17 +380,18 @@ ASSIGNED -> CANCELLED
 | ---------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `NODE_ENV`                                                             | no (default `development`)   | `production` enables SSL for Postgres, `secure`+`sameSite=none` cookies, hides internal error details |
 | `PORT`                                                                 | no (default `3000`)          | HTTP port                                                                                             |
+| `DOMAIN`                                                               | yes                          | public base URL, only used for the startup log lines (`<DOMAIN>/api/v1`, `<DOMAIN>/api/docs`)         |
 | `CORS_ORIGINS`                                                         | yes                          | comma-separated allowed origins                                                                       |
-| `DATABASE_URL`                                                         | yes                          | `postgresql://user:pass@host:port/db`                                                                 |
-| `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`                           | host required                | cache, OTP storage, rate-limit storage                                                                |
+| `FRONTEND_URL`                                                         | yes (valid URL)              | where `GET /auth/google/callback` redirects to after setting the session cookie                       |
+| `DATABASE_URL`                                                         | yes                          | `postgresql://user:pass@host:port/db` (must start with `postgres://` or `postgresql://`)              |
+| `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`                           | host required                | cache, OTP storage, rate-limit storage (port defaults to `6379`, password optional)                   |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`                              | yes, >=32 chars, must differ | signing secrets                                                                                       |
-| `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN`                      | no (default `15m` / `7d`)    | duration strings                                                                                      |
+| `JWT_ACCESS_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN`                      | no (default `15m` / `7d`)    | duration strings, format `<number><s\|m\|h\|d>`                                                       |
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | yes                          | image storage                                                                                         |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`    | host + from required         | OTP emails                                                                                            |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`    | host + from required         | OTP emails (port defaults to `587`, user/password optional)                                           |
 | `OTP_SECRET`                                                           | yes, >=32 chars              | HMAC key for OTP hashing                                                                              |
-| `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`                              | only for `seed:admin`        | first ADMIN account                                                                                   |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`      | only if using Google OAuth   |                                                                                                       |
-| `FRONTEND_URL`                                                         | yes                          | where `GET /auth/google/callback` redirects to after setting the session cookie                       |
+| `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`                              | only for `seed:admin`        | first ADMIN account (password min 8 chars)                                                            |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`      | **yes**                      | Google OAuth; the startup validation requires all three, even if you don't plan to use Google sign-in |
 
 Validated at startup with `zod` — the app refuses to boot if anything is missing or malformed.
 
@@ -423,21 +428,21 @@ Requires: Node >= 22.12, PostgreSQL (with privileges to `CREATE EXTENSION`), Red
 - **`RedisService`** — `getJson`/`setJson` (TTL), `del`, `delByPattern` (SCAN-based).
 - **`UploadService`** — `uploadImages(files, folder, maxCount)` (magic-byte check -> Cloudinary), `deleteImages(images)`. Shared verbatim between properties and units.
 - **`EmailService`** — direct `nodemailer` + `ejs`, never throws.
-- **`LeaseExpirationService.run()`** — lazy expiration sweep; called before selected lease/unit/rental-request operations.
-- **`CacheInvalidationService`** — `invalidateUnitsAndDashboard()`, `invalidateDashboard()`.
+- **`LeaseExpirationService.run()`** — lazy expiration sweep; called before lease, unit and rental-request operations and before the dashboard is computed.
+- **`CacheInvalidationService`** — `invalidateUnitsAndDashboard()`, `invalidateDashboard()`. Failures are logged, never thrown; entries then stay stale until their TTL.
 - **`RedisThrottlerStorage`** — hand-written Lua-script `ThrottlerStorage`.
-- **`AllExceptionsFilter`** — maps PG error codes to HTTP statuses; hides internal messages in production.
-- **`ResponseInterceptor`** — `{ success: true, data, meta? }` envelope.
-- **Guards**: `JwtAuthGuard` -> `RolesGuard` -> `ThrottlerGuard`, all global. `@Public()` bypasses the first.
+- **`AllExceptionsFilter`** — maps PG error codes to HTTP statuses (`23505` unique -> `409`, `23P01` exclusion/overlap -> `409`, `23503` foreign key -> `409`, `23514` check -> `422`, `23502` not-null -> `422`, `22001` too long -> `400`, `22P02` invalid input -> `400`); hides internal messages in production.
+- **`LoggingInterceptor`** / **`ResponseInterceptor`** — request logging; `{ success: true, data, meta? }` envelope.
+- **Guards**: `JwtAuthGuard` -> `RolesGuard` -> `ThrottlerGuard`, all global. `@Public()` bypasses the first. `JwtAuthGuard` reloads the user on every request, so a deactivated account is rejected immediately even with a still-valid access token.
 - **`@CurrentUser()`** — injects the authenticated `User`.
 
 ## Full API reference
 
-All routes are prefixed `/api/v1`. Pagination query params (`page`, `limit` max 100, `sortBy`, `sortOrder`) are available on every list endpoint unless noted.
+All routes are prefixed `/api/v1`. Pagination query params (`page` default 1, `limit` default 20 / max 100, `sortBy`, `sortOrder` `ASC|DESC` default `DESC`) are available on every list endpoint unless noted. `GET /api/v1/` is a public, unthrottled endpoint that returns a plain "API is running" string.
 
-Allowed `sortBy` values per list endpoint (default `createdAt`): `/properties` — `createdAt`, `name`, `city`; `/units` — `createdAt`, `unitNumber`, `area`, `bedrooms`; `/leases` and `/rental-requests` — `createdAt`, `startDate`, `endDate`.
+Allowed `sortBy` values per list endpoint (default `createdAt`): `/properties` — `createdAt`, `name`, `city`; `/units` — `createdAt`, `unitNumber`, `area`, `bedrooms`; `/leases` and `/rental-requests` — `createdAt`, `startDate`, `endDate`; `/maintenance` — `createdAt`, `priority`, `status`; `/users` — `createdAt`, `email`, `firstName`, `lastName`, `role`.
 
-### `/auth` — all public, rate-limited as a group (5/min)
+### `/auth` — all public, rate-limited (5/min)
 
 | Method & path                   | Body / notes                                                                 | Success                                                  | Errors                          |
 | ------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------- |
@@ -490,24 +495,24 @@ Allowed `sortBy` values per list endpoint (default `createdAt`): `/properties` �
 
 ### `/leases`
 
-| Method & path         | Access                                            | Body / query                                                                                                                                                                       |
-| --------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /`               | TENANT (own), OWNER (own properties), ADMIN (all) | `?status=&unitId=&tenantId=` + pagination; excludes leases of soft-deleted properties for OWNER                                                                                    |
-| `POST /`              | OWNER (own unit), ADMIN                           | `{tenantId, unitId, startDate, endDate, notes?}`; `rentAmount` is snapshotted from the unit automatically, never client-supplied; `400`/`409` as before; audited (`LEASE_CREATED`) |
-| `GET /:id`            | tenant, owner, ADMIN                              |                                                                                                                                                                                    |
-| `PATCH /:id`          | owner, ADMIN                                      | `PENDING` only                                                                                                                                                                     |
-| `POST /:id/activate`  | owner, ADMIN                                      | audited (`LEASE_ACTIVATED`)                                                                                                                                                        |
-| `POST /:id/terminate` | owner, ADMIN                                      | audited (`LEASE_TERMINATED`)                                                                                                                                                       |
+| Method & path         | Access                                            | Body / query                                                                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /`               | TENANT (own), OWNER (own properties), ADMIN (all) | `?status=&unitId=&tenantId=` + pagination; excludes leases of soft-deleted properties for OWNER                                                                                                                                                                    |
+| `POST /`              | OWNER (own unit), ADMIN                           | `{tenantId, unitId, startDate, endDate, notes?}`; `rentAmount` is snapshotted from the unit automatically, never client-supplied; `400` invalid dates or `tenantId` not an active `TENANT`; `409` unit not `AVAILABLE` or dates overlap; audited (`LEASE_CREATED`) |
+| `GET /:id`            | tenant, owner, ADMIN                              |                                                                                                                                                                                                                                                                    |
+| `PATCH /:id`          | owner, ADMIN                                      | `PENDING` only                                                                                                                                                                                                                                                     |
+| `POST /:id/activate`  | owner, ADMIN                                      | audited (`LEASE_ACTIVATED`)                                                                                                                                                                                                                                        |
+| `POST /:id/terminate` | owner, ADMIN                                      | audited (`LEASE_TERMINATED`)                                                                                                                                                                                                                                       |
 
 ### `/rental-requests`
 
-| Method & path       | Access                                            | Body / notes                                                                                                                                                                                                                                                                               |
-| ------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /`             | TENANT (own), OWNER (own properties), ADMIN (all) | `?status=` + pagination; excludes requests on units of soft-deleted properties for OWNER                                                                                                                                                                                                   |
-| `POST /`            | TENANT                                            | `{unitId, startDate, endDate, message?}`; `tenantId`/`status` rejected if sent; `400` invalid dates or `endDate` in the past, `404` unit/property not found, `409` unit not `AVAILABLE`, dates overlap a lease, or this tenant already has a request for the unit; notifies owner; audited |
-| `GET /:id`          | tenant (own), owner (own properties), ADMIN       |                                                                                                                                                                                                                                                                                            |
-| `POST /:id/approve` | owner (own properties), ADMIN                     | creates a `PENDING` lease, unit stays `AVAILABLE`; `409` if not `PENDING`, the period (`endDate`) has ended, the unit is no longer `AVAILABLE`, or the dates conflict; notifies tenant; audited                                                                                            |
-| `POST /:id/reject`  | owner (own properties), ADMIN                     | notifies tenant; audited                                                                                                                                                                                                                                                                   |
+| Method & path       | Access                                            | Body / notes                                                                                                                                                                                                                                                                                                   |
+| ------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /`             | TENANT (own), OWNER (own properties), ADMIN (all) | `?status=` + pagination; excludes requests on units of soft-deleted properties for OWNER                                                                                                                                                                                                                       |
+| `POST /`            | TENANT                                            | `{unitId, startDate, endDate, message?}`; `tenantId`/`status` rejected if sent; `400` invalid dates or `endDate` in the past, `404` unit/property not found, `409` unit not `AVAILABLE`, dates overlap a lease, or this tenant already has a request for the unit (unique constraint); notifies owner; audited |
+| `GET /:id`          | tenant (own), owner (own properties), ADMIN       |                                                                                                                                                                                                                                                                                                                |
+| `POST /:id/approve` | owner (own properties), ADMIN                     | creates a `PENDING` lease, unit stays `AVAILABLE`; `409` if not `PENDING`, the period (`endDate`) has ended, the unit is no longer `AVAILABLE`, the tenant is no longer an active `TENANT`, or the dates conflict; notifies tenant; audited                                                                    |
+| `POST /:id/reject`  | owner (own properties), ADMIN                     | notifies tenant; audited                                                                                                                                                                                                                                                                                       |
 
 ### `/maintenance`
 
@@ -535,39 +540,42 @@ Allowed `sortBy` values per list endpoint (default `createdAt`): `/properties` �
 
 ### `/analytics` — OWNER (own) / ADMIN (system-wide)
 
-`GET /dashboard` — same fields as before; unaffected by rental requests (approving one does not invalidate this cache, only activating the resulting lease does).
+`GET /dashboard` — property, unit, occupancy, lease and maintenance counts for the caller's scope; unaffected by rental requests (approving one does not invalidate this cache, only activating the resulting lease does).
 
 ## Caching
 
-| Key pattern                             | What                       | TTL | Invalidated by                                                                                                                                                                                                                                                                                                      |
-| --------------------------------------- | -------------------------- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `units:search:{sha256(scope+query)}`    | `GET /units` result pages  | 60s | unit create/update/delete/status/image change; property create with an initial `unit`; property delete; lease activate/terminate/expiration. `scope` is `admin`, the owner's own id, or the literal `tenant` (every tenant's `AVAILABLE`-only results for the same filters are identical, so they share one entry). |
-| `dashboard:stats:{admin \| owner:<id>}` | `GET /analytics/dashboard` | 60s | the above, plus property create/update/delete/images, and any maintenance status transition                                                                                                                                                                                                                         |
+| Key pattern                           | What                       | TTL | Invalidated by                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------- | -------------------------- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `units:search:{sha256(scope+query)}`  | `GET /units` result pages  | 60s | unit create/update/delete/status/image change; property create with an initial `unit`; property delete; lease activate/terminate/expiration. `scope` is `admin`, the owner's own id, or the literal `tenant` (every tenant's `AVAILABLE`-only results for the same filters are identical, so they share one entry). |
+| `dashboard:stats:{admin \| <userId>}` | `GET /analytics/dashboard` | 60s | the above, plus property create/update/delete/images, and any maintenance status transition                                                                                                                                                                                                                         |
 
 Rental requests are not cached and invalidate nothing — creating/approving/rejecting one never changes unit status, and the `PENDING` lease an approval creates doesn't affect cached figures until activated.
 
+Cache reads and writes fail soft: if Redis is unavailable the request falls through to the database, and a failed invalidation is logged and the stale entry expires with its TTL.
+
 ## Rate limiting
 
-Global default 100/min/IP; `/auth/*` as a group is 5/min, then a block period. Backed by `RedisThrottlerStorage`.
+Global default: 100 requests/min per IP. The whole `/auth` controller is limited to 5 requests/min (applied per endpoint, per IP); once the limit is exceeded the client is blocked for the throttler's block period. Counters live in Redis through `RedisThrottlerStorage`. The root `GET /` route is exempt.
 
 ## Security measures
 
-- Helmet, CORS allow-list, `trust proxy`.
+- Helmet (CSP disabled — the Swagger UI loads its assets from jsDelivr), CORS allow-list with credentials, `trust proxy`.
 - `ValidationPipe({whitelist, forbidNonWhitelisted, transform})` globally — also what rejects `tenantId`/`status` on a rental request.
-- JWT access/refresh with separate secrets; rotation + reuse detection; httpOnly refresh cookie; OAuth callback never puts a token in a URL.
-- bcrypt (SHA-256 pre-hashed).
+- JWT access/refresh with separate secrets; rotation + reuse detection; httpOnly refresh cookie scoped to `/api/v1/auth`; OAuth callback never puts a token in a URL.
+- The auth guard re-checks the user's `isActive` flag on every request.
+- bcrypt (SHA-256 pre-hashed), dummy-hash verification for unknown emails.
 - OTPs HMAC-hashed, single-use, rate-limited, 5-attempt lockout.
 - RBAC + resource-level ownership checks (two-layer IDOR defense), including the soft-delete-aware filtering described under "Zombie units."
 - `GET /units/:id` returns `404` (not `403`) to a `TENANT` for a non-`AVAILABLE` unit — a deliberate enumeration-safety choice.
 - Uploads validated by file content, size- and count-capped.
-- Row-level locking on every concurrent state transition (lease activation, rental-request approval, maintenance transitions).
+- Row-level locking on every concurrent state transition (lease creation/activation, rental-request approval, maintenance transitions).
 - Real database constraints (`CHECK`, `EXCLUDE`, partial unique, and `UNIQUE (tenantId, unitId)` on rental requests) as the final concurrency guard, not just application checks.
 - Global exception filter; no stack traces in production.
 
 ## Deployment
 
 1. Build Command: `npm run migration:run && npm run build`.
-2. Set every environment variable above, **including** `FRONTEND_URL`.
+2. Set every environment variable above, **including** `FRONTEND_URL` and the three `GOOGLE_*` variables.
 3. `NODE_ENV=production` enables Postgres SSL, `secure`+`sameSite=none` cookies, generic error messages.
 4. `trust proxy` already enabled for correct client IPs/rate limiting behind Vercel.
 
@@ -577,31 +585,32 @@ Global default 100/min/IP; `/auth/*` as a group is 5/min, then a block period. B
 api/
   index.ts
 src/
-  main.ts, app.module.ts, app.setup.ts
+  main.ts, app.module.ts, app.setup.ts, app.controller.ts
   config/env.validation.ts
   database/
     data-source.ts
     migrations/
-      1790376650206-InitSchema.ts
-      <timestamp>-AddGoogleAuth.ts
-      <timestamp>-AddPropertyCreatedAuditAction.ts
-      <timestamp>-AddRentalRequests.ts        rental_requests table + notification/audit enum values
-      <timestamp>-AddRentalRequestTenantUnitUnique.ts   UNIQUE (tenantId, unitId)
-      <timestamp>-AddUnitImages.ts
-      <timestamp>-AddRentAmount.ts            rentAmount on units, leases, rental_requests
+      1790520347985-Initial.ts                  full initial schema (all core tables, lease EXCLUDE/CHECK/partial unique)
+      1790773883975-Initial.ts                  users.avatar default + email index rebuild
+      1790874240358-AddRentalRequests.ts        rental_requests table, rentAmount on units/leases, units.images,
+                                                notification/audit enum values
+      1791201331582-UpdateUnitAndProperty.ts    drops units.building, UNIQUE (propertyId, unitNumber),
+                                                propertyType enum update, country default 'Egypt'
+      1791287387632-UpdateUnitAndProperty.ts    UNIQUE (tenantId, unitId) on rental_requests
     seeds/seed-admin.ts
   common/
     decorators/ guards/ filters/ interceptors/ pagination/
     policies/   policy.utils (canManageProperty, canAccessLease, canAccessRentalRequest,
                                canAccessMaintenance, canCloseOrCancelMaintenance)
     redis/ uploads/ mail/ cache/ throttler/ lease-expiration/ types/ utils/
-  auth/            incl. strategies/google.strategy.ts, utils/refresh-cookie.util.ts
+  auth/            incl. google.service.ts (GoogleStrategy), otp.service.ts, password.service.ts,
+                   utils/refresh-cookie.util.ts
   users/           incl. dto/list-user-directory-query, user-directory-response
   properties/
   units/           incl. dto/*-images (shared pattern with properties)
   leases/
   rental-requests/ controller, service, module, entities/, enums/, dto/
-  maintenance/     incl. the new images-add endpoint
+  maintenance/     incl. the images-add endpoint
   notifications/
   audit-logs/
   analytics/
