@@ -202,27 +202,27 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 
 No overlap constraint on this table by design. A request does not reserve a unit, so different tenants may have pending requests for the same unit and dates. Conflicts are resolved at approval time by the `leases` constraints above.
 
-A **single tenant**, however, can only ever have one rental request per unit — including after it was `REJECTED`. There is no pre-check in the service: the second insert violates `UNIQUE (tenantId, unitId)` and `AllExceptionsFilter` maps the Postgres `23505` error to a generic `409` ("A record with the same unique value already exists").
+A **single tenant**, however, can have at most one rental request per unit **while it is `PENDING`**: the partial unique index enforces it in the database, and the service checks first so the tenant gets a specific `409` ("You already have a pending request for this unit") instead of the generic unique-violation message. Once a request is `REJECTED` (or `APPROVED`), the tenant may submit a new request for the same unit.
 
 ### `maintenance_requests`
 
-| Column                   | Type                                                                  | Notes                                                                |
-| ------------------------ | --------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `id`                     | uuid PK                                                               |                                                                      |
-| `title`                  | varchar(150)                                                          |                                                                      |
-| `description`            | text                                                                  |                                                                      |
-| `category`               | enum `PLUMBING / ELECTRICITY / HVAC / CARPENTRY / APPLIANCES / OTHER` |                                                                      |
-| `priority`               | enum `LOW / MEDIUM / HIGH / URGENT`                                   | indexed                                                              |
-| `images`                 | jsonb `{url, publicId}[]`                                             | default `[]`, up to 5; addable while `OPEN`, not just at creation    |
-| `unitId`                 | uuid FK -> units, `RESTRICT`                                          | indexed — derived from the tenant's active lease, never client input |
-| `tenantId`               | uuid FK -> users, `RESTRICT`                                          |                                                                      |
-| `status`                 | enum `OPEN / ASSIGNED / IN_PROGRESS / RESOLVED / CLOSED / CANCELLED`  | default `OPEN`, indexed                                              |
-| `assignedStaffId`        | uuid FK -> users, `RESTRICT`, nullable                                | indexed                                                              |
-| `scheduledDate`          | date, nullable                                                        |                                                                      |
-| `completionImages`       | jsonb `{url, publicId}[]`                                             | default `[]`, up to 5, set on completion                             |
-| `resolutionDescription`  | text, nullable                                                        |                                                                      |
-| `resolvedAt`             | timestamptz, nullable                                                 |                                                                      |
-| `createdAt`, `updatedAt` | timestamptz                                                           |                                                                      |
+| Column                   | Type                                                                  | Notes                                                                                 |
+| ------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `id`                     | uuid PK                                                               |                                                                                       |
+| `title`                  | varchar(150)                                                          |                                                                                       |
+| `description`            | text                                                                  |                                                                                       |
+| `category`               | enum `PLUMBING / ELECTRICITY / HVAC / CARPENTRY / APPLIANCES / OTHER` |                                                                                       |
+| `priority`               | enum `LOW / MEDIUM / HIGH / URGENT`                                   | indexed                                                                               |
+| `images`                 | jsonb `{url, publicId}[]`                                             | default `[]`, up to 5; addable while `OPEN`, not just at creation                     |
+| `unitId`                 | uuid FK -> units, `RESTRICT`                                          | indexed — sent by the tenant, accepted only if they hold an ACTIVE lease on that unit |
+| `tenantId`               | uuid FK -> users, `RESTRICT`                                          |                                                                                       |
+| `status`                 | enum `OPEN / ASSIGNED / IN_PROGRESS / RESOLVED / CLOSED / CANCELLED`  | default `OPEN`, indexed                                                               |
+| `assignedStaffId`        | uuid FK -> users, `RESTRICT`, nullable                                | indexed                                                                               |
+| `scheduledDate`          | date, nullable                                                        |                                                                                       |
+| `completionImages`       | jsonb `{url, publicId}[]`                                             | default `[]`, up to 5, set on completion                                              |
+| `resolutionDescription`  | text, nullable                                                        |                                                                                       |
+| `resolvedAt`             | timestamptz, nullable                                                 |                                                                                       |
+| `createdAt`, `updatedAt` | timestamptz                                                           |                                                                                       |
 
 ### `maintenance_status_history`
 
@@ -298,7 +298,7 @@ PENDING -> ACTIVE -> EXPIRED   (automatic)
 - **Direct creation** (`POST /leases`) validates `startDate < endDate` (`400`), requires `tenantId` to be an **active user with the `TENANT` role** (`400`), checks the actor can manage the unit, then — inside a transaction that locks the unit row (`pessimistic_write`) — requires the unit to be `AVAILABLE` (`409`). The exclusion constraint is the final guard against overlapping `PENDING`/`ACTIVE` leases.
 - **Activation** locks both the lease and the unit row (`pessimistic_write`), requires `PENDING` + `AVAILABLE`, then sets lease -> `ACTIVE` and unit -> `RENTED`, atomically.
 - **Termination** works from `PENDING` or `ACTIVE`; if it was `ACTIVE`, the unit goes back to `AVAILABLE`. A property's `PENDING` leases are also terminated automatically when the property is deleted.
-- **Expiration is lazy, not scheduled** — there is no cron job. A single set-based statement moves every `ACTIVE` lease whose `endDate` is before today to `EXPIRED` and releases its unit back to `AVAILABLE` (only if the unit is still `RENTED`). It runs before lease, unit and rental-request operations and before the analytics dashboard is computed. Only `ACTIVE` leases expire; a `PENDING` lease whose dates have passed stays `PENDING` until it is terminated.
+- **Expiration is lazy, not scheduled** — there is no cron job. A single set-based statement moves every `ACTIVE` lease whose `endDate` is before today to `EXPIRED` and releases its unit back to `AVAILABLE` (only if the unit is still `RENTED`). It runs before lease, unit and rental-request operations and before the analytics dashboard is computed. Only `ACTIVE` leases expire; a `PENDING` lease whose dates have passed stays `PENDING` until it is terminated. `MaintenanceService.create` does not run the sweep; instead the active-lease lookup itself ignores leases whose `endDate` has passed.
 - Only a `PENDING` lease can be edited; the exclusion constraint re-validates on that update too.
 
 ### Rental request state machine
@@ -323,7 +323,7 @@ OWNER / ADMIN
 ```
 
 - **Discovery**: a tenant finds rentable units through `GET /properties` (all properties) and `GET /properties/:id` (that property plus its `AVAILABLE` units only), or directly through `GET /units` (cross-property, `AVAILABLE`-only, filterable by `bedrooms`/`minArea`/`maxArea`/`minPrice`/`maxPrice`/`propertyId`) and `GET /units/:id` (a single `AVAILABLE` unit; a non-`AVAILABLE` unit returns `404` to a `TENANT`, not `403` — this is a deliberate enumeration-safety choice, not a bug: it avoids confirming that a specific unit exists but is rented).
-- **Create**: `TENANT` only. `tenantId`/`status` in the body are rejected (`400`) by `whitelist`+`forbidNonWhitelisted`, not silently dropped. The backend re-verifies everything regardless of what the UI showed: dates are valid (`startDate < endDate`), `endDate` is not in the past (`400`), the unit exists and its property is not soft-deleted (`404`), the unit is `AVAILABLE` (`409`), and the range doesn't overlap a `PENDING`/`ACTIVE` lease (`409`). A tenant can only ever submit one request per unit (`409` from the `UNIQUE (tenantId, unitId)` constraint, whatever the status of the earlier request). The unit's `rentAmount` is snapshotted. The owner is notified; the action is audited (`RENTAL_REQUEST_CREATED`). A request does **not** reserve the unit — different tenants may have pending requests for the same unit/dates.
+- **Create**: `TENANT` only. `tenantId`/`status` in the body are rejected (`400`) by `whitelist`+`forbidNonWhitelisted`, not silently dropped. The backend re-verifies everything regardless of what the UI showed: dates are valid (`startDate < endDate`), `endDate` is not in the past (`400`), the unit exists and its property is not soft-deleted (`404`), the unit is `AVAILABLE` (`409`), and the range doesn't overlap a `PENDING`/`ACTIVE` lease (`409`). A tenant can have only one `PENDING` request per unit (`409`); after a rejection they may request the same unit again. The unit's `rentAmount` is snapshotted. The owner is notified; the action is audited (`RENTAL_REQUEST_CREATED`). A request does **not** reserve the unit — different tenants may have pending requests for the same unit/dates.
 - **Approve**: OWNER (own properties) or ADMIN, in one transaction: lock the request row, authorize via `unit -> property -> ownerId`, require `PENDING` and a period that has not ended (`409`); lock the unit row (serializing concurrent approvals), require `AVAILABLE` and the tenant still an active `TENANT`; create a `PENDING` lease (tenant, unit, dates, `rentAmount` from the request); mark the request `APPROVED`; notify the tenant; audit (`RENTAL_REQUEST_APPROVED`, `metadata: {leaseId}`). Does **not** change unit status. The lease exclusion constraint is the final concurrency guard against a racing direct `POST /leases` — a constraint violation rolls the whole transaction back and the request stays `PENDING`.
 - **Reject**: OWNER (own properties) or ADMIN, `PENDING` only. Request becomes `REJECTED`; no lease; tenant notified; audited (`RENTAL_REQUEST_REJECTED`).
 - **Response shape**: besides the request fields (including the stored `rentAmount` snapshot) the response carries `tenant {id, firstName, lastName, phone}` and `unit {id, unitNumber, propertyId, rentAmount}` (the unit's current rent) so an owner can see who is asking for what before approving. Nothing else about the user or unit is exposed.
@@ -354,7 +354,7 @@ OPEN -> CANCELLED
 ASSIGNED -> CANCELLED
 ```
 
-- **Create**: TENANT only, unit derived from their own `ACTIVE` lease (`400` if they have none). Up to 5 images.
+- **Create**: TENANT only. The body carries `unitId`; the tenant must hold an `ACTIVE`, not-yet-ended lease on that unit (`400` otherwise), and that lease row is locked for the duration of the transaction. A tenant with several active leases chooses the unit. Up to 5 images.
 - **Add images**: tenant (own), owner (own property), or ADMIN may add more images while the request is still `OPEN` (not just at creation) — up to the same 5-image cap, additively.
 - **Assign**: OWNER (own property) or ADMIN; target must be an active `MAINTENANCE_STAFF`; request must be `OPEN`.
 - **Start / Complete**: the assigned staff member only — not even ADMIN overrides this. `complete` requires `resolutionDescription`, accepts up to 5 completion images, sets `resolvedAt`.
@@ -506,29 +506,29 @@ Allowed `sortBy` values per list endpoint (default `createdAt`): `/properties` �
 
 ### `/rental-requests`
 
-| Method & path       | Access                                            | Body / notes                                                                                                                                                                                                                                                                                                   |
-| ------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /`             | TENANT (own), OWNER (own properties), ADMIN (all) | `?status=` + pagination; excludes requests on units of soft-deleted properties for OWNER                                                                                                                                                                                                                       |
-| `POST /`            | TENANT                                            | `{unitId, startDate, endDate, message?}`; `tenantId`/`status` rejected if sent; `400` invalid dates or `endDate` in the past, `404` unit/property not found, `409` unit not `AVAILABLE`, dates overlap a lease, or this tenant already has a request for the unit (unique constraint); notifies owner; audited |
-| `GET /:id`          | tenant (own), owner (own properties), ADMIN       |                                                                                                                                                                                                                                                                                                                |
-| `POST /:id/approve` | owner (own properties), ADMIN                     | creates a `PENDING` lease, unit stays `AVAILABLE`; `409` if not `PENDING`, the period (`endDate`) has ended, the unit is no longer `AVAILABLE`, the tenant is no longer an active `TENANT`, or the dates conflict; notifies tenant; audited                                                                    |
-| `POST /:id/reject`  | owner (own properties), ADMIN                     | notifies tenant; audited                                                                                                                                                                                                                                                                                       |
+| Method & path       | Access                                            | Body / notes                                                                                                                                                                                                                                                                                         |
+| ------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /`             | TENANT (own), OWNER (own properties), ADMIN (all) | `?status=&unitId=` + pagination; excludes requests on units of soft-deleted properties for OWNER                                                                                                                                                                                                     |
+| `POST /`            | TENANT                                            | `{unitId, startDate, endDate, message?}`; `tenantId`/`status` rejected if sent; `400` invalid dates or `endDate` in the past, `404` unit/property not found, `409` unit not `AVAILABLE`, dates overlap a lease, or this tenant already has a `PENDING` request for the unit; notifies owner; audited |
+| `GET /:id`          | tenant (own), owner (own properties), ADMIN       |                                                                                                                                                                                                                                                                                                      |
+| `POST /:id/approve` | owner (own properties), ADMIN                     | creates a `PENDING` lease, unit stays `AVAILABLE`; `409` if not `PENDING`, the period (`endDate`) has ended, the unit is no longer `AVAILABLE`, the tenant is no longer an active `TENANT`, or the dates conflict; notifies tenant; audited                                                          |
+| `POST /:id/reject`  | owner (own properties), ADMIN                     | notifies tenant; audited                                                                                                                                                                                                                                                                             |
 
 ### `/maintenance`
 
-| Method & path                   | Access                                    | Body / notes                                                       |
-| ------------------------------- | ----------------------------------------- | ------------------------------------------------------------------ |
-| `GET /`                         | scoped by role                            | `?status=&priority=&category=` + pagination                        |
-| `POST /`                        | TENANT (own active lease)                 | multipart `{title, description, category, priority, images[]<=5}`  |
-| `GET /:id`                      | scoped                                    |                                                                    |
-| `POST /:id/images`              | tenant (own), owner (own property), ADMIN | multipart `images[]`, additive up to 5 total, only while `OPEN`    |
-| `POST /:id/assign`              | owner, ADMIN                              | `{assignedStaffId, scheduledDate?, notes?}`                        |
-| `POST /:id/start`               | assigned staff only                       | `{notes?}`                                                         |
-| `POST /:id/complete`            | assigned staff only                       | multipart `{resolutionDescription, notes?, completionImages[]<=5}` |
-| `POST /:id/close` / `/cancel`   | tenant, owner, ADMIN                      | `{notes?}`                                                         |
-| `DELETE /:id/images`            | tenant, owner, ADMIN                      | `{publicId}`, only `OPEN`                                          |
-| `DELETE /:id/completion-images` | assigned staff only                       | `{publicId}`, only `RESOLVED`                                      |
-| `GET /:id/history`              | scoped                                    |                                                                    |
+| Method & path                   | Access                                    | Body / notes                                                              |
+| ------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------- |
+| `GET /`                         | scoped by role                            | `?status=&priority=&category=` + pagination                               |
+| `POST /`                        | TENANT (own active lease)                 | multipart `{unitId, title, description, category, priority, images[]<=5}` |
+| `GET /:id`                      | scoped                                    |                                                                           |
+| `POST /:id/images`              | tenant (own), owner (own property), ADMIN | multipart `images[]`, additive up to 5 total, only while `OPEN`           |
+| `POST /:id/assign`              | owner, ADMIN                              | `{assignedStaffId, scheduledDate?, notes?}`                               |
+| `POST /:id/start`               | assigned staff only                       | `{notes?}`                                                                |
+| `POST /:id/complete`            | assigned staff only                       | multipart `{resolutionDescription, notes?, completionImages[]<=5}`        |
+| `POST /:id/close` / `/cancel`   | tenant, owner, ADMIN                      | `{notes?}`                                                                |
+| `DELETE /:id/images`            | tenant, owner, ADMIN                      | `{publicId}`, only `OPEN`                                                 |
+| `DELETE /:id/completion-images` | assigned staff only                       | `{publicId}`, only `RESOLVED`                                             |
+| `GET /:id/history`              | scoped                                    |                                                                           |
 
 ### `/notifications` — scoped to the caller
 
@@ -568,8 +568,8 @@ Global default: 100 requests/min per IP. The whole `/auth` controller is limited
 - RBAC + resource-level ownership checks (two-layer IDOR defense), including the soft-delete-aware filtering described under "Zombie units."
 - `GET /units/:id` returns `404` (not `403`) to a `TENANT` for a non-`AVAILABLE` unit — a deliberate enumeration-safety choice.
 - Uploads validated by file content, size- and count-capped.
-- Row-level locking on every concurrent state transition (lease creation/activation, rental-request approval, maintenance transitions).
-- Real database constraints (`CHECK`, `EXCLUDE`, partial unique, and `UNIQUE (tenantId, unitId)` on rental requests) as the final concurrency guard, not just application checks.
+- Row-level locking on every concurrent state transition (lease creation/activation, rental-request approval, maintenance transitions and image changes).
+- Real database constraints (`CHECK`, `EXCLUDE`, partial unique, and partial `UNIQUE (tenantId, unitId) WHERE status = 'PENDING'` on rental requests) as the final concurrency guard, not just application checks.
 - Global exception filter; no stack traces in production.
 
 ## Deployment
@@ -596,7 +596,7 @@ src/
                                                 notification/audit enum values
       1791201331582-UpdateUnitAndProperty.ts    drops units.building, UNIQUE (propertyId, unitNumber),
                                                 propertyType enum update, country default 'Egypt'
-      1791287387632-UpdateUnitAndProperty.ts    UNIQUE (tenantId, unitId) on rental_requests
+      1791287387632-UpdateUnitAndProperty.ts    UNIQUE (tenantId, unitId) on rental_requests (superseded by the next one)
     seeds/seed-admin.ts
   common/
     decorators/ guards/ filters/ interceptors/ pagination/

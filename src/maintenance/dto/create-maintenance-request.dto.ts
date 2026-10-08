@@ -1,11 +1,21 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsEnum, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 import { trim } from '../../common/utils/transform.util.js';
 import { MaintenanceCategory } from '../enums/maintenance-category.enum.js';
 import { MaintenancePriority } from '../enums/maintenance-priority.enum.js';
 
 export class CreateMaintenanceRequestDto {
+  @ApiProperty()
+  @IsUUID()
+  unitId: string;
+
   @ApiProperty({ maxLength: 150 })
   @Transform(trim)
   @IsString()

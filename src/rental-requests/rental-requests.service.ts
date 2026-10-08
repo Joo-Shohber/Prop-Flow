@@ -192,6 +192,19 @@ export class RentalRequestsService {
       throw new ConflictException('The unit is not available for rent');
     }
 
+    const hasPending = await this.requestRepo.exists({
+      where: {
+        tenantId: actor.id,
+        unitId: unit.id,
+        status: RentalRequestStatus.PENDING,
+      },
+    });
+    if (hasPending) {
+      throw new ConflictException(
+        'You already have a pending request for this unit',
+      );
+    }
+
     if (
       await this.hasLeaseConflict(
         this.dataSource.manager,

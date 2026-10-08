@@ -67,8 +67,10 @@ export class MaintenanceService {
       where: { id },
       relations: { unit: { property: true } },
     });
+
     if (!maintenance?.unit?.property)
       throw new NotFoundException('Maintenance request not found');
+
     return maintenance;
   }
 
@@ -82,11 +84,13 @@ export class MaintenanceService {
    */
   async findForActor(actor: User, id: string): Promise<MaintenanceRequest> {
     const maintenance = await this.findOne(id);
+
     if (!canAccessMaintenance(actor, maintenance)) {
       throw new ForbiddenException(
         'You do not have access to this maintenance request',
       );
     }
+
     return maintenance;
   }
 
@@ -108,17 +112,18 @@ export class MaintenanceService {
 
     const queryBuilder = this.maintenanceRepo
       .createQueryBuilder('request')
-      .innerJoin('request.unit', 'unit');
+      .innerJoin('request.unit', 'unit')
+      .innerJoin('unit.property', 'property')
+      .andWhere('property."deletedAt" IS NULL');
 
     if (actor.role === UserRole.TENANT) {
       queryBuilder.andWhere('request.tenantId = :tenantId', {
         tenantId: actor.id,
       });
     } else if (actor.role === UserRole.OWNER) {
-      queryBuilder.andWhere(
-        'unit.propertyId IN (SELECT id FROM properties WHERE "ownerId" = :ownerId AND "deletedAt" IS NULL)',
-        { ownerId: actor.id },
-      );
+      queryBuilder.andWhere('property.ownerId = :ownerId', {
+        ownerId: actor.id,
+      });
     } else if (actor.role === UserRole.MAINTENANCE_STAFF) {
       queryBuilder.andWhere('request.assignedStaffId = :staffId', {
         staffId: actor.id,
@@ -156,17 +161,14 @@ export class MaintenanceService {
    * @param dto - Maintenance request data.
    * @param files - Optional maintenance images.
    * @returns The newly created maintenance request.
-   * @throws BadRequestException If the tenant has no active lease.
+   * @throws BadRequestException If the tenant has no active lease for the unit.
    */
   async create(
     actor: User,
     dto: CreateMaintenanceRequestDto,
     files: Express.Multer.File[],
   ): Promise<MaintenanceRequest> {
-    const lease = await this.leasesService.findActiveLeaseForTenant(actor.id);
-    if (!lease) throw new BadRequestException('You have no active lease');
-
-    const images = files.length
+    const images = files?.length
       ? await this.uploadService.uploadImages(
           files,
           'propflow/maintenance',
@@ -174,39 +176,61 @@ export class MaintenanceService {
         )
       : [];
 
-    const created = await this.dataSource.transaction(async (manager) => {
-      const unit = await this.loadUnit(manager, lease.unitId);
+    try {
+      const created = await this.dataSource.transaction(async (manager) => {
+        const lease = await this.leasesService.findActiveLeaseForTenantUnit(
+          actor.id,
+          dto.unitId,
+          manager,
+        );
 
-      const maintenance = manager.create(MaintenanceRequest, {
-        ...dto,
-        unitId: unit.id,
-        tenantId: actor.id,
-        status: MaintenanceStatus.OPEN,
-        images,
+        if (!lease) {
+          throw new BadRequestException(
+            'You do not have an active lease for this unit',
+          );
+        }
+
+        const unit = await this.loadUnit(manager, dto.unitId);
+
+        const maintenance = manager.create(MaintenanceRequest, {
+          ...dto,
+          unitId: unit.id,
+          tenantId: actor.id,
+          status: MaintenanceStatus.OPEN,
+          images,
+        });
+
+        const saved = await manager.save(maintenance);
+
+        await this.notificationsService.create(manager, {
+          recipientId: unit.property.ownerId,
+          type: NotificationType.MAINTENANCE_CREATED,
+          title: 'New maintenance request',
+          message: `A new ${dto.priority.toLowerCase()} priority request was submitted for unit ${unit.unitNumber}.`,
+          relatedEntityType: 'MaintenanceRequest',
+          relatedEntityId: saved.id,
+        });
+
+        return saved;
       });
-      const saved = await manager.save(maintenance);
 
-      await this.notificationsService.create(manager, {
-        recipientId: unit.property.ownerId,
-        type: NotificationType.MAINTENANCE_CREATED,
-        title: 'New maintenance request',
-        message: `A new ${dto.priority.toLowerCase()} priority request was submitted for unit ${unit.unitNumber}.`,
-        relatedEntityType: 'MaintenanceRequest',
-        relatedEntityId: saved.id,
-      });
+      await this.cache.invalidateDashboard();
 
-      return saved;
-    });
+      return created;
+    } catch (error) {
+      try {
+        await this.uploadService.deleteImages(images);
+      } catch {}
 
-    await this.cache.invalidateDashboard();
-    return created;
+      throw error;
+    }
   }
 
   /**
    * Assigns an open maintenance request to an active maintenance staff member.
    * The request is locked inside a transaction to prevent concurrent status
    * changes while the assignment is being performed.
-   * @param actor - Authenticated property owner or authorized manager.
+   * @param actor - Authenticated property owner or administrator.
    * @param id - Maintenance request ID.
    * @param dto - Staff assignment and optional scheduling information.
    * @returns The assigned maintenance request.
@@ -235,11 +259,13 @@ export class MaintenanceService {
     const assigned = await this.dataSource.transaction(async (manager) => {
       const request = await this.lock(manager, id);
       const unit = await this.loadUnit(manager, request.unitId);
+
       if (!canManageProperty(actor, unit.property)) {
         throw new ForbiddenException(
           'You do not have access to this maintenance request',
         );
       }
+
       if (request.status !== MaintenanceStatus.OPEN) {
         throw new ConflictException('Only an OPEN request can be assigned');
       }
@@ -249,6 +275,7 @@ export class MaintenanceService {
       request.assignedStaffId = staff.id;
       request.scheduledDate = dto.scheduledDate ?? null;
       await manager.save(request);
+
       await this.createMaintenanceHistory(
         manager,
         request.id,
@@ -321,9 +348,7 @@ export class MaintenanceService {
       }
 
       const previousStatus = request.status;
-
       request.status = MaintenanceStatus.IN_PROGRESS;
-
       await manager.save(request);
 
       await this.createMaintenanceHistory(
@@ -361,7 +386,7 @@ export class MaintenanceService {
     files: Express.Multer.File[],
     ip?: string,
   ): Promise<MaintenanceRequest> {
-    const completionImages = files.length
+    const completionImages = files?.length
       ? await this.uploadService.uploadImages(
           files,
           'propflow/maintenance-completions',
@@ -369,66 +394,79 @@ export class MaintenanceService {
         )
       : [];
 
-    const completed = await this.dataSource.transaction(async (manager) => {
-      const request = await this.lock(manager, id);
-      if (request.assignedStaffId !== actor.id) {
-        throw new ForbiddenException(
-          'Only the assigned staff member can complete this request',
+    try {
+      const completed = await this.dataSource.transaction(async (manager) => {
+        const request = await this.lock(manager, id);
+
+        if (request.assignedStaffId !== actor.id) {
+          throw new ForbiddenException(
+            'Only the assigned staff member can complete this request',
+          );
+        }
+
+        if (request.status !== MaintenanceStatus.IN_PROGRESS) {
+          throw new ConflictException(
+            'Only an IN_PROGRESS request can be completed',
+          );
+        }
+
+        const previousStatus = request.status;
+        request.status = MaintenanceStatus.RESOLVED;
+        request.resolutionDescription = dto.resolutionDescription;
+        request.completionImages = completionImages;
+        request.resolvedAt = new Date();
+        await manager.save(request);
+
+        await this.createMaintenanceHistory(
+          manager,
+          request.id,
+          previousStatus,
+          request.status,
+          actor.id,
+          dto.notes,
         );
-      }
-      if (request.status !== MaintenanceStatus.IN_PROGRESS) {
-        throw new ConflictException(
-          'Only an IN_PROGRESS request can be completed',
-        );
-      }
 
-      const previousStatus = request.status;
-      request.status = MaintenanceStatus.RESOLVED;
-      request.resolutionDescription = dto.resolutionDescription;
-      request.completionImages = completionImages;
-      request.resolvedAt = new Date();
-      await manager.save(request);
-      await this.createMaintenanceHistory(
-        manager,
-        request.id,
-        previousStatus,
-        request.status,
-        actor.id,
-        dto.notes,
-      );
+        const unit = await this.loadUnit(manager, request.unitId);
 
-      const unit = await this.loadUnit(manager, request.unitId);
-      await this.notificationsService.create(manager, {
-        recipientId: request.tenantId,
-        type: NotificationType.MAINTENANCE_RESOLVED,
-        title: 'Your maintenance request was resolved',
-        message: `"${request.title}" has been marked as resolved.`,
-        relatedEntityType: 'MaintenanceRequest',
-        relatedEntityId: request.id,
+        await this.notificationsService.create(manager, {
+          recipientId: request.tenantId,
+          type: NotificationType.MAINTENANCE_RESOLVED,
+          title: 'Your maintenance request was resolved',
+          message: `"${request.title}" has been marked as resolved.`,
+          relatedEntityType: 'MaintenanceRequest',
+          relatedEntityId: request.id,
+        });
+
+        await this.notificationsService.create(manager, {
+          recipientId: unit.property.ownerId,
+          type: NotificationType.MAINTENANCE_RESOLVED,
+          title: 'A maintenance request was resolved',
+          message: `"${request.title}" on unit ${unit.unitNumber} has been resolved.`,
+          relatedEntityType: 'MaintenanceRequest',
+          relatedEntityId: request.id,
+        });
+
+        await this.auditLogsService.record(manager, {
+          userId: actor.id,
+          action: AuditAction.MAINTENANCE_COMPLETED,
+          entity: 'MaintenanceRequest',
+          entityId: request.id,
+          ipAddress: ip,
+        });
+
+        return request;
       });
 
-      await this.notificationsService.create(manager, {
-        recipientId: unit.property.ownerId,
-        type: NotificationType.MAINTENANCE_RESOLVED,
-        title: 'A maintenance request was resolved',
-        message: `"${request.title}" on unit ${unit.unitNumber} has been resolved.`,
-        relatedEntityType: 'MaintenanceRequest',
-        relatedEntityId: request.id,
-      });
+      await this.cache.invalidateDashboard();
 
-      await this.auditLogsService.record(manager, {
-        userId: actor.id,
-        action: AuditAction.MAINTENANCE_COMPLETED,
-        entity: 'MaintenanceRequest',
-        entityId: request.id,
-        ipAddress: ip,
-      });
+      return completed;
+    } catch (error) {
+      try {
+        await this.uploadService.deleteImages(completionImages);
+      } catch {}
 
-      return request;
-    });
-
-    await this.cache.invalidateDashboard();
-    return completed;
+      throw error;
+    }
   }
 
   /**
@@ -466,9 +504,7 @@ export class MaintenanceService {
       }
 
       const previousStatus = request.status;
-
       request.status = MaintenanceStatus.CLOSED;
-
       await manager.save(request);
 
       await this.createMaintenanceHistory(
@@ -528,9 +564,7 @@ export class MaintenanceService {
       }
 
       const previousStatus = request.status;
-
       request.status = MaintenanceStatus.CANCELLED;
-
       await manager.save(request);
 
       await this.createMaintenanceHistory(
@@ -615,12 +649,23 @@ export class MaintenanceService {
       MAINTENANCE_MAX_IMAGES,
     );
 
-    request.images = [...request.images, ...uploaded];
-
-    let saved: MaintenanceRequest;
-
     try {
-      saved = await this.maintenanceRepo.save(request);
+      await this.dataSource.transaction(async (manager) => {
+        const locked = await this.lock(manager, id);
+
+        if (locked.status !== MaintenanceStatus.OPEN)
+          throw new ConflictException(
+            'Images can only be added while the request is OPEN',
+          );
+
+        if (locked.images.length + uploaded.length > MAINTENANCE_MAX_IMAGES)
+          throw new ConflictException(
+            `A request can have at most ${MAINTENANCE_MAX_IMAGES} images`,
+          );
+
+        locked.images = [...locked.images, ...uploaded];
+        await manager.save(locked);
+      });
     } catch (error) {
       try {
         await this.uploadService.deleteImages(uploaded);
@@ -630,12 +675,13 @@ export class MaintenanceService {
     }
 
     await this.cache.invalidateDashboard();
-
-    return saved;
+    return this.findOne(id);
   }
 
   /**
    * Removes an image from an OPEN maintenance request.
+   * The request row is locked so concurrent image changes or status
+   * transitions cannot overwrite each other.
    * @param actor - Authenticated user performing the action.
    * @param id - Maintenance request ID.
    * @param publicId - Public ID of the image to remove.
@@ -649,49 +695,48 @@ export class MaintenanceService {
     id: string,
     publicId: string,
   ): Promise<MaintenanceRequest> {
-    const maintenance = await this.findForActor(actor, id);
+    const request = await this.findForActor(actor, id);
 
-    if (!canCloseOrCancelMaintenance(actor, maintenance)) {
+    if (!canCloseOrCancelMaintenance(actor, request)) {
       throw new ForbiddenException(
         'You do not have access to this maintenance request',
       );
     }
 
-    if (maintenance.status !== MaintenanceStatus.OPEN) {
-      throw new ConflictException(
-        'Images can only be removed while the request is OPEN',
-      );
-    }
+    const removed = await this.dataSource.transaction(async (manager) => {
+      const locked = await this.lock(manager, id);
 
-    const image = maintenance.images.find((img) => img.publicId === publicId);
-    if (!image) throw new NotFoundException('Image not found on this request');
+      if (locked.status !== MaintenanceStatus.OPEN) {
+        throw new ConflictException(
+          'Images can only be removed while the request is OPEN',
+        );
+      }
 
-    const originalImages = maintenance.images;
-    maintenance.images = maintenance.images.filter(
-      (img) => img.publicId !== publicId,
-    );
+      const image = locked.images.find((img) => img.publicId === publicId);
 
-    let saved: MaintenanceRequest;
+      if (!image) {
+        throw new NotFoundException('Image not found on this request');
+      }
 
-    try {
-      saved = await this.maintenanceRepo.save(maintenance);
-    } catch (error) {
-      maintenance.images = originalImages;
-      throw error;
-    }
+      locked.images = locked.images.filter((img) => img.publicId !== publicId);
+      await manager.save(locked);
+
+      return image;
+    });
 
     try {
-      await this.uploadService.deleteImages([image]);
+      await this.uploadService.deleteImages([removed]);
     } catch {}
 
     await this.cache.invalidateDashboard();
 
-    return saved;
+    return this.findOne(id);
   }
 
   /**
    * Removes a completion image from a RESOLVED maintenance request.
    * Only the staff member assigned to the request can modify completion images.
+   * The request row is locked so concurrent changes cannot overwrite each other.
    * @param actor - Authenticated maintenance staff member.
    * @param id - Maintenance request ID.
    * @param publicId - Public ID of the completion image to remove.
@@ -705,44 +750,46 @@ export class MaintenanceService {
     id: string,
     publicId: string,
   ): Promise<MaintenanceRequest> {
-    const maintenance = await this.findForActor(actor, id);
+    const request = await this.findForActor(actor, id);
 
-    if (maintenance.assignedStaffId !== actor.id) {
+    if (request.assignedStaffId !== actor.id) {
       throw new ForbiddenException(
         'Only the assigned staff member can edit completion images',
       );
     }
 
-    if (maintenance.status !== MaintenanceStatus.RESOLVED) {
-      throw new ConflictException(
-        'Completion images can only be removed while the request is RESOLVED',
+    const removed = await this.dataSource.transaction(async (manager) => {
+      const locked = await this.lock(manager, id);
+
+      if (locked.status !== MaintenanceStatus.RESOLVED) {
+        throw new ConflictException(
+          'Completion images can only be removed while the request is RESOLVED',
+        );
+      }
+
+      const image = locked.completionImages.find(
+        (img) => img.publicId === publicId,
       );
-    }
 
-    const image = maintenance.completionImages.find(
-      (img) => img.publicId === publicId,
-    );
-    if (!image) throw new NotFoundException('Image not found on this request');
+      if (!image) {
+        throw new NotFoundException('Image not found on this request');
+      }
 
-    const originalImages = maintenance.completionImages;
-    maintenance.completionImages = maintenance.completionImages.filter(
-      (img) => img.publicId !== publicId,
-    );
+      locked.completionImages = locked.completionImages.filter(
+        (img) => img.publicId !== publicId,
+      );
+      await manager.save(locked);
 
-    let saved: MaintenanceRequest;
-
-    try {
-      saved = await this.maintenanceRepo.save(maintenance);
-    } catch (error) {
-      maintenance.completionImages = originalImages;
-      throw error;
-    }
+      return image;
+    });
 
     try {
-      await this.uploadService.deleteImages([image]);
-    } catch {}
+      await this.uploadService.deleteImages([removed]);
+    } catch {
+      // Cloudinary cleanup can be retried later. The database is already the source of truth.
+    }
 
-    return saved;
+    return this.findOne(id);
   }
 
   private async lock(

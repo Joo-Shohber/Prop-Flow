@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { LeaseExpirationService } from '../common/lease-expiration/lease-expiration.service.js';
 import {
   Paginated,
@@ -124,7 +124,9 @@ export class LeasesService {
     if (query.unitId)
       queryBuilder.andWhere('lease.unitId = :unitId', { unitId: query.unitId });
     if (query.tenantId)
-      queryBuilder.andWhere('lease.tenantId = :tenantId', { tenantId: query.tenantId });
+      queryBuilder.andWhere('lease.tenantId = :tenantId', {
+        tenantId: query.tenantId,
+      });
 
     const [data, total] = await queryBuilder
       .orderBy(`lease.${sortBy}`, sortOrder)
@@ -136,14 +138,26 @@ export class LeasesService {
   }
 
   /**
-   * Finds the tenant's active lease.
-   * Used by Maintenance: the unit is derived from the tenant's active lease.
+   * Finds an active lease for a specific tenant and unit.
    * @param tenantId The ID of the tenant.
+   * @param unitId The ID of the unit.
+   * @param manager EntityManager used for the current transactional context.
    * @returns The tenant's active lease, or `null` if no active lease exists.
    */
-  async findActiveLeaseForTenant(tenantId: string): Promise<Lease | null> {
-    await this.leaseExpiration.run();
-    return this.leaseRepo.findOneBy({ tenantId, status: LeaseStatus.ACTIVE });
+  async findActiveLeaseForTenantUnit(
+    tenantId: string,
+    unitId: string,
+    manager: EntityManager,
+  ): Promise<Lease | null> {
+    return manager
+      .getRepository(Lease)
+      .createQueryBuilder('lease')
+      .setLock('pessimistic_write')
+      .where('lease.tenantId = :tenantId', { tenantId })
+      .andWhere('lease.unitId = :unitId', { unitId })
+      .andWhere('lease.status = :status', { status: LeaseStatus.ACTIVE })
+      .andWhere('lease."endDate" >= CURRENT_DATE')
+      .getOne();
   }
 
   /**
