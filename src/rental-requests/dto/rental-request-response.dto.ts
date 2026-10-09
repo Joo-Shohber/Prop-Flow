@@ -25,6 +25,13 @@ export class RentalRequestResponseDto {
   @ApiProperty({ nullable: true, type: String }) message: string | null;
   @ApiProperty({ enum: RentalRequestStatus }) status: RentalRequestStatus;
   @ApiProperty() rentAmount: number;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description:
+      'The PENDING lease created by approving this request; null until approved',
+  })
+  leaseId: string | null;
   @ApiPropertyOptional({ type: RentalRequestTenantSummaryDto })
   tenant?: RentalRequestTenantSummaryDto;
   @ApiPropertyOptional({ type: RentalRequestUnitSummaryDto })
@@ -42,6 +49,7 @@ export class RentalRequestResponseDto {
     dto.message = entity.message;
     dto.status = entity.status;
     dto.rentAmount = entity.rentAmount;
+    dto.leaseId = entity.leaseId ?? null;
     dto.createdAt = entity.createdAt;
     dto.updatedAt = entity.updatedAt;
     if (entity.tenant) {

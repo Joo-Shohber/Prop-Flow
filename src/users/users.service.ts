@@ -99,6 +99,22 @@ export class UsersService {
   }
 
   /**
+   * Finds the password hash of a user by ID.
+   * @param id - The user's unique identifier.
+   * @returns The user's ID and password hash (`null` hash for Google-only
+   * accounts), or `null` if the user does not exist.
+   */
+  findCredentialsById(
+    id: string,
+  ): Promise<Pick<User, 'id' | 'passwordHash'> | null> {
+    return this.userRepo
+      .createQueryBuilder('user')
+      .select(['user.id', 'user.passwordHash'])
+      .where('user.id = :id', { id })
+      .getOne();
+  }
+
+  /**
    * Finds a user by their Google account ID.
    * @param googleId - The unique Google account ID.
    * @returns The matching user, or `null` if no user is found.

@@ -10,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -25,6 +26,7 @@ import {
 } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { Roles } from '../common/decorators/roles.decorator.js';
+import { UnitSummaryInterceptor } from '../common/interceptors/unit-summary.interceptor.js';
 import { User } from '../users/entities/user.entity.js';
 import { UserRole } from '../users/enums/user-role.enum.js';
 import { CreateLeaseDto } from './dto/create-lease.dto.js';
@@ -43,6 +45,7 @@ const MANAGE_ROLES = [UserRole.OWNER, UserRole.ADMIN] as const;
 @ApiUnauthorizedResponse({
   description: 'Missing, invalid or expired access token',
 })
+@UseInterceptors(UnitSummaryInterceptor)
 @Controller('leases')
 export class LeasesController {
   constructor(private readonly leases: LeasesService) {}

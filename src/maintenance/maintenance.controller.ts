@@ -31,6 +31,7 @@ import {
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { Roles } from '../common/decorators/roles.decorator.js';
+import { UnitSummaryInterceptor } from '../common/interceptors/unit-summary.interceptor.js';
 import {
   MAINTENANCE_MAX_IMAGES,
   MAX_IMAGE_SIZE_BYTES,
@@ -64,6 +65,7 @@ const ALL_ROLES = [
 @ApiUnauthorizedResponse({
   description: 'Missing, invalid or expired access token',
 })
+@UseInterceptors(UnitSummaryInterceptor)
 @Controller('maintenance')
 export class MaintenanceController {
   constructor(private readonly maintenance: MaintenanceService) {}

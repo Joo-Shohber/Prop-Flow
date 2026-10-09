@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { UnitSummaryDto } from '../../units/dto/unit-summary.dto.js';
 import { LeaseStatus } from '../enums/lease-status.enum.js';
 
 export class LeaseResponseDto {
@@ -7,6 +8,8 @@ export class LeaseResponseDto {
   @ApiProperty() tenantId: string;
 
   @ApiProperty() unitId: string;
+
+  @ApiProperty({ type: UnitSummaryDto }) unit: UnitSummaryDto;
 
   @ApiProperty() startDate: string;
 

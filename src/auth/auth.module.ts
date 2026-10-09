@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../common/guards/roles.guard.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
+import { AuthSessionController } from './auth-session.controller.js';
 import { AuthService } from './auth.service.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 import { PasswordService } from './password.service.js';
@@ -13,6 +14,7 @@ import { MailModule } from '../common/mail/mail.module.js';
 import { OtpService } from './otp.service.js';
 import { PassportModule } from '@nestjs/passport';
 import { GoogleStrategy } from './google.service.js';
+import { RefreshTokenCleanupService } from './refresh-token-cleanup.service.js';
 
 @Module({
   imports: [
@@ -22,12 +24,13 @@ import { GoogleStrategy } from './google.service.js';
     TypeOrmModule.forFeature([RefreshToken]),
     JwtModule.register({}),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, AuthSessionController],
   providers: [
     AuthService,
     PasswordService,
     OtpService,
     GoogleStrategy,
+    RefreshTokenCleanupService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],

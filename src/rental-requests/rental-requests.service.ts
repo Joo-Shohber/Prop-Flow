@@ -343,6 +343,7 @@ export class RentalRequestsService {
       await manager.save(lease);
 
       request.status = RentalRequestStatus.APPROVED;
+      request.leaseId = lease.id;
 
       await manager.save(request);
 

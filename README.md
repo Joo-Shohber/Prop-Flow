@@ -122,15 +122,15 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 
 ### `refresh_tokens`
 
-| Column      | Type                        | Notes                          |
-| ----------- | --------------------------- | ------------------------------ |
-| `id`        | uuid PK                     | doubles as the JWT `jti` claim |
-| `userId`    | uuid FK -> users, `CASCADE` | indexed                        |
-| `family`    | uuid                        | indexed                        |
-| `tokenHash` | varchar(64)                 | SHA-256 of the raw token       |
-| `expiresAt` | timestamptz                 |                                |
-| `revoked`   | boolean                     | default `false`                |
-| `createdAt` | timestamptz                 |                                |
+| Column      | Type                        | Notes                                               |
+| ----------- | --------------------------- | --------------------------------------------------- |
+| `id`        | uuid PK                     | doubles as the JWT `jti` claim                      |
+| `userId`    | uuid FK -> users, `CASCADE` | indexed                                             |
+| `family`    | uuid                        | indexed                                             |
+| `tokenHash` | varchar(64)                 | SHA-256 of the raw token                            |
+| `expiresAt` | timestamptz                 | indexed; expired rows are deleted lazily (see Auth) |
+| `revoked`   | boolean                     | default `false`                                     |
+| `createdAt` | timestamptz                 |                                                     |
 
 ### `properties`
 
@@ -194,6 +194,7 @@ Modular monolith — one Nest module per domain, `common/` for cross-cutting con
 | `unitId`                 | uuid FK -> units, `RESTRICT`                         | indexed; the property is reached through `unit -> property`                               |
 | `startDate`, `endDate`   | date                                                 | same format/semantics as leases                                                           |
 | `rentAmount`             | integer                                              | snapshot of the unit's `rentAmount` at request time                                       |
+| `leaseId`                | uuid FK -> leases, `SET NULL`, nullable              | the `PENDING` lease created when the request was approved; `null` until then              |
 | `message`                | text, nullable                                       | max 1000 characters                                                                       |
 | `status`                 | enum `PENDING / APPROVED / REJECTED`                 | default `PENDING`, indexed                                                                |
 | `createdAt`, `updatedAt` | timestamptz                                          |                                                                                           |
@@ -324,9 +325,9 @@ OWNER / ADMIN
 
 - **Discovery**: a tenant finds rentable units through `GET /properties` (all properties) and `GET /properties/:id` (that property plus its `AVAILABLE` units only), or directly through `GET /units` (cross-property, `AVAILABLE`-only, filterable by `bedrooms`/`minArea`/`maxArea`/`minPrice`/`maxPrice`/`propertyId`) and `GET /units/:id` (a single `AVAILABLE` unit; a non-`AVAILABLE` unit returns `404` to a `TENANT`, not `403` — this is a deliberate enumeration-safety choice, not a bug: it avoids confirming that a specific unit exists but is rented).
 - **Create**: `TENANT` only. `tenantId`/`status` in the body are rejected (`400`) by `whitelist`+`forbidNonWhitelisted`, not silently dropped. The backend re-verifies everything regardless of what the UI showed: dates are valid (`startDate < endDate`), `endDate` is not in the past (`400`), the unit exists and its property is not soft-deleted (`404`), the unit is `AVAILABLE` (`409`), and the range doesn't overlap a `PENDING`/`ACTIVE` lease (`409`). A tenant can have only one `PENDING` request per unit (`409`); after a rejection they may request the same unit again. The unit's `rentAmount` is snapshotted. The owner is notified; the action is audited (`RENTAL_REQUEST_CREATED`). A request does **not** reserve the unit — different tenants may have pending requests for the same unit/dates.
-- **Approve**: OWNER (own properties) or ADMIN, in one transaction: lock the request row, authorize via `unit -> property -> ownerId`, require `PENDING` and a period that has not ended (`409`); lock the unit row (serializing concurrent approvals), require `AVAILABLE` and the tenant still an active `TENANT`; create a `PENDING` lease (tenant, unit, dates, `rentAmount` from the request); mark the request `APPROVED`; notify the tenant; audit (`RENTAL_REQUEST_APPROVED`, `metadata: {leaseId}`). Does **not** change unit status. The lease exclusion constraint is the final concurrency guard against a racing direct `POST /leases` — a constraint violation rolls the whole transaction back and the request stays `PENDING`.
+- **Approve**: OWNER (own properties) or ADMIN, in one transaction: lock the request row, authorize via `unit -> property -> ownerId`, require `PENDING` and a period that has not ended (`409`); lock the unit row (serializing concurrent approvals), require `AVAILABLE` and the tenant still an active `TENANT`; create a `PENDING` lease (tenant, unit, dates, `rentAmount` from the request); mark the request `APPROVED` and store the new lease's id in `leaseId`; notify the tenant; audit (`RENTAL_REQUEST_APPROVED`, `metadata: {leaseId}`). Does **not** change unit status. The lease exclusion constraint is the final concurrency guard against a racing direct `POST /leases` — a constraint violation rolls the whole transaction back and the request stays `PENDING`.
 - **Reject**: OWNER (own properties) or ADMIN, `PENDING` only. Request becomes `REJECTED`; no lease; tenant notified; audited (`RENTAL_REQUEST_REJECTED`).
-- **Response shape**: besides the request fields (including the stored `rentAmount` snapshot) the response carries `tenant {id, firstName, lastName, phone}` and `unit {id, unitNumber, propertyId, rentAmount}` (the unit's current rent) so an owner can see who is asking for what before approving. Nothing else about the user or unit is exposed.
+- **Response shape**: besides the request fields (including the stored `rentAmount` snapshot) the response carries `leaseId` (the pending lease created by the approval, `null` before) and `tenant {id, firstName, lastName, phone}` and `unit {id, unitNumber, propertyId, rentAmount}` (the unit's current rent) so an owner can see who is asking for what before approving. Nothing else about the user or unit is exposed.
 - Acting on an already-`APPROVED`/`REJECTED` request returns `409`.
 
 ### Zombie units (soft-deleted properties)
@@ -366,6 +367,8 @@ ASSIGNED -> CANCELLED
 - Passwords: bcrypt (12 rounds) over a SHA-256 pre-hash. Login for an unknown email still runs a dummy hash verification to reduce timing differences.
 - Login blocked (`403`) until email verified, and if deactivated.
 - **Refresh rotation + reuse detection**: every refresh issues a new pair and revokes the old row; presenting an already-used token revokes the whole family. Delivered only as an httpOnly cookie named `refresh_token`, scoped to the path `/api/v1/auth`. Logout revokes the current session's token family only; a password reset revokes **all** of the user's sessions.
+- **Refresh-token cleanup**: expired `refresh_tokens` rows are deleted lazily on login (at most once per hour, guarded by a Redis lock, never failing the login) — there is no scheduler. Revoked rows are kept until they expire, because presenting one is how reuse is detected; expired rows are safe to delete since the JWT itself is rejected on expiry before the database is consulted.
+- **Change password**: `POST /auth/change-password` (authenticated) verifies the current password, stores the new hash and revokes every other session in one transaction; the session identified by the refresh cookie stays signed in (if the cookie is missing or foreign, all sessions are revoked). Wrong current password is a `400`, not a `401`, so clients don't mistake it for an expired access token. Google-only accounts have no password yet and use "forgot password".
 - **OTP**: 6-digit, HMAC-hashed in Redis, valid for 10 minutes, single-use, 5-attempt lockout, 60s resend cooldown. `forgot-password`/`resend-verification-otp` always return the same generic message.
 - **Google OAuth**: `GET /auth/google` redirects to Google; `GET /auth/google/callback` links/creates the account, sets the refresh cookie, and **redirects the browser to** `FRONTEND_URL` (no token in the URL — the frontend performs its normal silent `POST /auth/refresh` on load to pick up the session from the cookie). A new Google account is created as a `TENANT`.
 
@@ -433,29 +436,32 @@ Requires: Node >= 22.12, PostgreSQL (with privileges to `CREATE EXTENSION`), Red
 - **`RedisThrottlerStorage`** — hand-written Lua-script `ThrottlerStorage`.
 - **`AllExceptionsFilter`** — maps PG error codes to HTTP statuses (`23505` unique -> `409`, `23P01` exclusion/overlap -> `409`, `23503` foreign key -> `409`, `23514` check -> `422`, `23502` not-null -> `422`, `22001` too long -> `400`, `22P02` invalid input -> `400`); hides internal messages in production.
 - **`LoggingInterceptor`** / **`ResponseInterceptor`** — request logging; `{ success: true, data, meta? }` envelope.
+- **`UnitSummaryInterceptor`** — applied to the leases and maintenance controllers; every response item with a `unitId` (lists, single items and action results) carries `unit {id, unitNumber, propertyId}`. An already-loaded `unit` is reduced to the summary (the nested property is no longer returned); otherwise one batched query fills it in. Items without a `unitId` (status history) are untouched.
+- **`RefreshTokenCleanupService`** — hourly, Redis-locked deletion of expired refresh tokens, triggered from login.
 - **Guards**: `JwtAuthGuard` -> `RolesGuard` -> `ThrottlerGuard`, all global. `@Public()` bypasses the first. `JwtAuthGuard` reloads the user on every request, so a deactivated account is rejected immediately even with a still-valid access token.
 - **`@CurrentUser()`** — injects the authenticated `User`.
 
 ## Full API reference
 
-All routes are prefixed `/api/v1`. Pagination query params (`page` default 1, `limit` default 20 / max 100, `sortBy`, `sortOrder` `ASC|DESC` default `DESC`) are available on every list endpoint unless noted. `GET /api/v1/` is a public, unthrottled endpoint that returns a plain "API is running" string.
+All routes are prefixed `/api/v1`. Pagination query params (`page` default 1, `limit` default 20 / max 100, `sortBy`, `sortOrder` `ASC|DESC` default `DESC`) are available on every list endpoint unless noted. Lease and maintenance responses always include `unit {id, unitNumber, propertyId}`. `GET /api/v1/` is a public, unthrottled endpoint that returns a plain "API is running" string.
 
 Allowed `sortBy` values per list endpoint (default `createdAt`): `/properties` — `createdAt`, `name`, `city`; `/units` — `createdAt`, `unitNumber`, `area`, `bedrooms`; `/leases` and `/rental-requests` — `createdAt`, `startDate`, `endDate`; `/maintenance` — `createdAt`, `priority`, `status`; `/users` — `createdAt`, `email`, `firstName`, `lastName`, `role`.
 
-### `/auth` — all public, rate-limited (5/min)
+### `/auth` — public and rate-limited (5/min), except `change-password` which needs a Bearer token
 
-| Method & path                   | Body / notes                                                                 | Success                                                  | Errors                          |
-| ------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------- |
-| `POST /register`                | `{email, password(8-128), firstName, lastName, phone?, role: TENANT\|OWNER}` | 201, created user message                                | 400, 409 duplicate email        |
-| `POST /login`                   | `{email, password}`                                                          | 200 `{accessToken, expiresIn, user}` + refresh cookie    | 401, 403 deactivated/unverified |
-| `POST /refresh`                 | cookie only                                                                  | 200 `{accessToken, expiresIn}` + rotated cookie          | 401 missing/invalid/reused      |
-| `POST /logout`                  | cookie if present                                                            | 200 always, clears cookie                                | —                               |
-| `POST /verify-email`            | `{email, otp}`                                                               | 200 message                                              | 400 invalid/expired/locked      |
-| `POST /resend-verification-otp` | `{email}`                                                                    | 200 generic message always                               | —                               |
-| `POST /forgot-password`         | `{email}`                                                                    | 200 generic message always                               | —                               |
-| `POST /reset-password`          | `{email, otp, newPassword}`                                                  | 200 message, revokes all sessions                        | 400                             |
-| `GET /google`                   | —                                                                            | redirects to Google                                      | —                               |
-| `GET /google/callback`          | —                                                                            | sets the refresh cookie, **redirects to `FRONTEND_URL`** | 403 deactivated                 |
+| Method & path                   | Body / notes                                                                 | Success                                                  | Errors                                     |
+| ------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------ |
+| `POST /register`                | `{email, password(8-128), firstName, lastName, phone?, role: TENANT\|OWNER}` | 201, created user message                                | 400, 409 duplicate email                   |
+| `POST /login`                   | `{email, password}`                                                          | 200 `{accessToken, expiresIn, user}` + refresh cookie    | 401, 403 deactivated/unverified            |
+| `POST /refresh`                 | cookie only                                                                  | 200 `{accessToken, expiresIn}` + rotated cookie          | 401 missing/invalid/reused                 |
+| `POST /logout`                  | cookie if present                                                            | 200 always, clears cookie                                | —                                          |
+| `POST /verify-email`            | `{email, otp}`                                                               | 200 message                                              | 400 invalid/expired/locked                 |
+| `POST /resend-verification-otp` | `{email}`                                                                    | 200 generic message always                               | —                                          |
+| `POST /forgot-password`         | `{email}`                                                                    | 200 generic message always                               | —                                          |
+| `POST /reset-password`          | `{email, otp, newPassword}`                                                  | 200 message, revokes all sessions                        | 400                                        |
+| `POST /change-password`         | **Bearer token required.** `{currentPassword, newPassword(8-128)}`           | 200 message; revokes other sessions, keeps this one      | 400 wrong current / same / no password set |
+| `GET /google`                   | —                                                                            | redirects to Google                                      | —                                          |
+| `GET /google/callback`          | —                                                                            | sets the refresh cookie, **redirects to `FRONTEND_URL`** | 403 deactivated                            |
 
 ### `/users`
 
@@ -555,7 +561,7 @@ Cache reads and writes fail soft: if Redis is unavailable the request falls thro
 
 ## Rate limiting
 
-Global default: 100 requests/min per IP. The whole `/auth` controller is limited to 5 requests/min (applied per endpoint, per IP); once the limit is exceeded the client is blocked for the throttler's block period. Counters live in Redis through `RedisThrottlerStorage`. The root `GET /` route is exempt.
+Global default: 100 requests/min per IP. The whole `/auth` path (including `change-password`) is limited to 5 requests/min (applied per endpoint, per IP); once the limit is exceeded the client is blocked for the throttler's block period. Counters live in Redis through `RedisThrottlerStorage`. The root `GET /` route is exempt.
 
 ## Security measures
 
@@ -597,6 +603,10 @@ src/
       1791201331582-UpdateUnitAndProperty.ts    drops units.building, UNIQUE (propertyId, unitNumber),
                                                 propertyType enum update, country default 'Egypt'
       1791287387632-UpdateUnitAndProperty.ts    UNIQUE (tenantId, unitId) on rental_requests (superseded by the next one)
+      1791400000000-RentalRequestPendingUnique.ts   drops that constraint, adds the partial unique index (PENDING only)
+      1791500000000-RefreshTokenExpiresAtIndex.ts   index on refresh_tokens.expiresAt (cleanup)
+      1791500000001-RentalRequestLeaseId.ts        rental_requests.leaseId + FK, backfilled from the audit log
+      1791500000002-AddUnitAuditActions.ts         adds UNIT_CREATED / UNIT_DELETED to audit_logs_action_enum
     seeds/seed-admin.ts
   common/
     decorators/ guards/ filters/ interceptors/ pagination/

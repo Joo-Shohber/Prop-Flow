@@ -9,6 +9,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { Lease } from '../../leases/entities/lease.entity.js';
 import { Unit } from '../../units/entities/unit.entity.js';
 import { User } from '../../users/entities/user.entity.js';
 import { RentalRequestStatus } from '../enums/rental-request-status.enum.js';
@@ -58,6 +59,13 @@ export class RentalRequest {
 
   @Column({ type: 'integer' })
   rentAmount: number;
+
+  @Column({ type: 'uuid', nullable: true })
+  leaseId: string | null;
+
+  @ManyToOne(() => Lease, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'leaseId' })
+  lease: Lease | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

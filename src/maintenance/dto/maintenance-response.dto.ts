@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { UnitSummaryDto } from '../../units/dto/unit-summary.dto.js';
 import { MaintenanceCategory } from '../enums/maintenance-category.enum.js';
 import { MaintenancePriority } from '../enums/maintenance-priority.enum.js';
 import { MaintenanceStatus } from '../enums/maintenance-status.enum.js';
@@ -22,6 +23,8 @@ export class MaintenanceResponseDto {
   @ApiProperty({ type: [ImageRefDto] }) images: ImageRefDto[];
 
   @ApiProperty() unitId: string;
+
+  @ApiProperty({ type: UnitSummaryDto }) unit: UnitSummaryDto;
 
   @ApiProperty() tenantId: string;
 

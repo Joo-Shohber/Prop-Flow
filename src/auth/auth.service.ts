@@ -13,6 +13,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { durationToSeconds } from '../common/utils/duration.util.js';
 import { safeEqual, sha256 } from '../common/utils/hash.util.js';
 import { EmailService } from '../common/mail/email.service.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { EmailDto } from './dto/email.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { MessageResponseDto } from './dto/message-response.dto.js';
@@ -24,6 +25,7 @@ import { OtpPurpose } from './enums/otp-purpose.enum.js';
 import { GoogleProfile } from './google.service.js';
 import { OtpService } from './otp.service.js';
 import { PasswordService } from './password.service.js';
+import { RefreshTokenCleanupService } from './refresh-token-cleanup.service.js';
 import { AuthTokens, RefreshTokenPayload } from './types/token.types.js';
 import { User } from '../users/entities/user.entity.js';
 import { UsersService } from '../users/users.service.js';
@@ -42,6 +44,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly refreshTokenCleanup: RefreshTokenCleanupService,
     @InjectRepository(RefreshToken)
     private readonly refreshTokens: Repository<RefreshToken>,
   ) {}
@@ -135,6 +138,8 @@ export class AuthService {
     const tokens = await this.issueTokens(credentials.id, family);
     const user = await this.usersService.findById(credentials.id);
 
+    await this.refreshTokenCleanup.runIfDue();
+
     return { user, ...tokens };
   }
 
@@ -173,6 +178,8 @@ export class AuthService {
 
     const family = randomUUID();
     const tokens = await this.issueTokens(user.id, family);
+
+    await this.refreshTokenCleanup.runIfDue();
 
     return { user, ...tokens };
   }
@@ -332,6 +339,89 @@ export class AuthService {
     const code = await this.otpService.issue(purpose, email);
 
     if (code) await this.emailService.sendOtp(email, code, purpose);
+  }
+
+  /**
+   * Changes the password of the authenticated user.
+   * Verifies the current password, stores the new hash and revokes every other
+   * session of the user in one transaction. The session identified by the
+   * refresh token cookie stays valid; if the cookie is missing or does not
+   * belong to the user, all sessions are revoked.
+   * @param user The authenticated user.
+   * @param dto Current and new password.
+   * @param refreshToken The refresh token cookie of the current session, if any.
+   * @returns A confirmation message.
+   * @throws BadRequestException If the account has no password, the current
+   * password is wrong, or the new password equals the current one. A 400 (not
+   * 401) is used so clients do not mistake it for an expired access token.
+   */
+  async changePassword(
+    user: User,
+    dto: ChangePasswordDto,
+    refreshToken?: string,
+  ): Promise<MessageResponseDto> {
+    const credentials = await this.usersService.findCredentialsById(user.id);
+
+    if (!credentials?.passwordHash) {
+      throw new BadRequestException(
+        'This account has no password yet. Use "forgot password" to set one',
+      );
+    }
+
+    const validPassword = await this.passwordService.verify(
+      credentials.passwordHash,
+      dto.currentPassword,
+    );
+
+    if (!validPassword) {
+      throw new BadRequestException('Current password is incorrect');
+    }
+
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException(
+        'New password must be different from the current password',
+      );
+    }
+
+    const currentFamily = await this.currentFamilyOf(user.id, refreshToken);
+    const passwordHash = await this.passwordService.hash(dto.newPassword);
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(User, { id: user.id }, { passwordHash });
+
+      const revoke = manager
+        .createQueryBuilder()
+        .update(RefreshToken)
+        .set({ revoked: true })
+        .where('"userId" = :userId AND revoked = false', { userId: user.id });
+
+      if (currentFamily) {
+        revoke.andWhere('family <> :family', { family: currentFamily });
+      }
+
+      await revoke.execute();
+    });
+
+    return {
+      message: currentFamily
+        ? 'Password changed. Your other devices were signed out'
+        : 'Password changed. Please log in again',
+    };
+  }
+
+  private async currentFamilyOf(
+    userId: string,
+    token?: string,
+  ): Promise<string | null> {
+    if (!token) return null;
+
+    try {
+      const payload = await this.verifyRefreshToken(token);
+
+      return payload.userId === userId ? payload.family : null;
+    } catch {
+      return null;
+    }
   }
 
   private async issueTokens(
