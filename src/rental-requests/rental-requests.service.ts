@@ -67,7 +67,10 @@ export class RentalRequestsService {
     });
 
     if (!request?.unit?.property) {
-      throw new NotFoundException('Rental request not found');
+      throw new NotFoundException({
+        code: ErrorCode.RENTAL_REQUEST_NOT_FOUND,
+        message: 'Rental request not found',
+      });
     }
 
     return request;
@@ -88,7 +91,10 @@ export class RentalRequestsService {
     const request = await this.findOne(id);
 
     if (!canAccessRentalRequest(actor, request)) {
-      throw new ForbiddenException('You do not have access to this request');
+      throw new ForbiddenException({
+        code: ErrorCode.RENTAL_REQUEST_ACCESS_DENIED,
+        message: 'You do not have access to this request',
+      });
     }
 
     return RentalRequestResponseDto.fromEntity(request);
@@ -116,7 +122,7 @@ export class RentalRequestsService {
       .createQueryBuilder('request')
       .innerJoinAndSelect('request.tenant', 'tenant')
       .innerJoinAndSelect('request.unit', 'unit')
-      .innerJoin('unit.property', 'property', 'property.deletedAt IS NULL');
+      .innerJoin('unit.property', 'property', 'property."deletedAt" IS NULL');
 
     if (actor.role === UserRole.TENANT) {
       queryBuilder.andWhere('request.tenantId = :selfId', {
@@ -189,7 +195,10 @@ export class RentalRequestsService {
     });
 
     if (!unit?.property) {
-      throw new NotFoundException('Unit not found');
+      throw new NotFoundException({
+        code: ErrorCode.UNIT_NOT_FOUND,
+        message: 'Unit not found',
+      });
     }
 
     if (unit.status !== UnitStatus.AVAILABLE) {
@@ -207,9 +216,10 @@ export class RentalRequestsService {
       },
     });
     if (hasPending) {
-      throw new ConflictException(
-        'You already have a pending request for this unit',
-      );
+      throw new ConflictException({
+        code: ErrorCode.RENTAL_REQUEST_DUPLICATE_PENDING,
+        message: 'You already have a pending request for this unit',
+      });
     }
 
     if (
@@ -321,9 +331,7 @@ export class RentalRequestsService {
       }
 
       const tenant = await manager.findOne(User, {
-        where: {
-          id: request.tenantId,
-        },
+        where: { id: request.tenantId },
       });
 
       if (!tenant || !tenant.isActive || tenant.role !== UserRole.TENANT) {
@@ -469,7 +477,10 @@ export class RentalRequestsService {
       const request = await this.lockRequest(manager, id);
 
       if (request.tenantId !== actor.id) {
-        throw new ForbiddenException('You do not have access to this request');
+        throw new ForbiddenException({
+          code: ErrorCode.RENTAL_REQUEST_ACCESS_DENIED,
+          message: 'You do not have access to this request',
+        });
       }
 
       const unit = await manager.findOne(Unit, {
@@ -478,7 +489,10 @@ export class RentalRequestsService {
       });
 
       if (!unit?.property) {
-        throw new NotFoundException('Rental request not found');
+        throw new NotFoundException({
+          code: ErrorCode.PROPERTY_NOT_FOUND,
+          message: 'Rental request not found',
+        });
       }
 
       if (request.status !== RentalRequestStatus.PENDING) {
@@ -530,7 +544,10 @@ export class RentalRequestsService {
       .getOne();
 
     if (!request) {
-      throw new NotFoundException('Rental request not found');
+      throw new NotFoundException({
+        code: ErrorCode.RENTAL_REQUEST_NOT_FOUND,
+        message: 'Rental request not found',
+      });
     }
 
     return request;
@@ -546,24 +563,29 @@ export class RentalRequestsService {
     request: RentalRequest,
   ): Promise<Unit> {
     const unit = await manager.findOne(Unit, {
-      where: {
-        id: request.unitId,
-      },
-      relations: {
-        property: true,
-      },
+      where: { id: request.unitId },
+      relations: { property: true },
     });
 
     if (!unit) {
-      throw new NotFoundException('Unit not found');
+      throw new NotFoundException({
+        code: ErrorCode.UNIT_NOT_FOUND,
+        message: 'Unit not found',
+      });
     }
 
     if (!unit.property) {
-      throw new NotFoundException('Property not found');
+      throw new NotFoundException({
+        code: ErrorCode.PROPERTY_NOT_FOUND,
+        message: 'Property not found',
+      });
     }
 
     if (!canManageProperty(actor, unit.property)) {
-      throw new ForbiddenException('You do not have access to this request');
+      throw new ForbiddenException({
+        code: ErrorCode.PROPERTY_ACCESS_DENIED,
+        message: 'You do not have access to this request',
+      });
     }
 
     return unit;

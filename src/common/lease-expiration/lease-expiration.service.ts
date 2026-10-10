@@ -12,7 +12,12 @@ const EXPIRE_LEASES = `
     UPDATE leases
     SET status = 'EXPIRED', "updatedAt" = now()
     WHERE status = 'ACTIVE' AND "endDate" < CURRENT_DATE
-    RETURNING "unitId"
+    RETURNING id, "unitId"
+  ),
+  cancelled_renewals AS (
+    UPDATE lease_renewal_requests
+    SET status = 'CANCELLED', "updatedAt" = now()
+    WHERE status = 'PENDING' AND "leaseId" IN (SELECT id FROM expired)
   ),
   released AS (
     UPDATE units

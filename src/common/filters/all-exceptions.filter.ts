@@ -86,6 +86,10 @@ const PG_CONSTRAINTS: Record<string, { code: ErrorCode; message: string }> = {
     code: ErrorCode.RENTAL_REQUEST_DUPLICATE_PENDING,
     message: 'You already have a pending request for this unit',
   },
+  UQ_lease_renewal_pending_lease: {
+    code: ErrorCode.RENEWAL_REQUEST_DUPLICATE_PENDING,
+    message: 'This lease already has a pending renewal request',
+  },
   IDX_2c410fb5acd7bea80786e93cbf: {
     code: ErrorCode.UNIT_NOT_AVAILABLE,
     message: 'The unit already has an active lease',

@@ -28,7 +28,9 @@ import { CreateLeaseDto } from './dto/create-lease.dto.js';
 import { ListLeasesQueryDto } from './dto/list-leases-query.dto.js';
 import { RenewLeaseDto } from './dto/renew-lease.dto.js';
 import { UpdateLeaseDto } from './dto/update-lease.dto.js';
+import { LeaseRenewalRequest } from './entities/lease-renewal-request.entity.js';
 import { Lease } from './entities/lease.entity.js';
+import { LeaseRenewalRequestStatus } from './enums/lease-renewal-request-status.enum.js';
 import { LeaseStatus } from './enums/lease-status.enum.js';
 import { ErrorCode } from '../common/errors/error-code.enum.js';
 import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
@@ -64,7 +66,13 @@ export class LeasesService {
       where: { id },
       relations: { unit: { property: true } },
     });
-    if (!lease?.unit?.property) throw new NotFoundException('Lease not found');
+
+    if (!lease?.unit?.property) {
+      throw new NotFoundException({
+        code: ErrorCode.LEASE_NOT_FOUND,
+        message: 'Lease not found',
+      });
+    }
 
     return lease;
   }
@@ -81,8 +89,12 @@ export class LeasesService {
     await this.leaseExpiration.run();
 
     const lease = await this.findOne(id);
+
     if (!canAccessLease(actor, lease)) {
-      throw new ForbiddenException('You do not have access to this lease');
+      throw new ForbiddenException({
+        code: ErrorCode.LEASE_ACCESS_DENIED,
+        message: 'You do not have access to this lease',
+      });
     }
 
     return lease;
@@ -202,8 +214,12 @@ export class LeasesService {
         .getOne();
 
       if (!lockedUnit) {
-        throw new NotFoundException('Unit not found');
+        throw new NotFoundException({
+          code: ErrorCode.UNIT_NOT_FOUND,
+          message: 'Unit not found',
+        });
       }
+
       if (lockedUnit.status !== UnitStatus.AVAILABLE) {
         throw new ConflictException({
           code: ErrorCode.UNIT_NOT_AVAILABLE,
@@ -301,17 +317,37 @@ export class LeasesService {
         .setLock('pessimistic_write')
         .where('lease.id = :id', { id })
         .getOne();
-      if (!lease) throw new NotFoundException('Lease not found');
+
+      if (!lease) {
+        throw new NotFoundException({
+          code: ErrorCode.LEASE_NOT_FOUND,
+          message: 'Lease not found',
+        });
+      }
 
       const unit = await manager.findOne(Unit, {
         where: { id: lease.unitId },
         relations: { property: true },
       });
-      if (!unit) throw new NotFoundException('Unit not found');
-      if (!unit.property) throw new NotFoundException('Property not found');
+
+      if (!unit) {
+        throw new NotFoundException({
+          code: ErrorCode.UNIT_NOT_FOUND,
+          message: 'Unit not found',
+        });
+      }
+
+      if (!unit.property)
+        throw new NotFoundException({
+          code: ErrorCode.PROPERTY_NOT_FOUND,
+          message: 'Property not found',
+        });
 
       if (!canManageProperty(actor, unit.property)) {
-        throw new ForbiddenException('You do not have access to this lease');
+        throw new ForbiddenException({
+          code: ErrorCode.PROPERTY_ACCESS_DENIED,
+          message: 'You do not have access to this lease',
+        });
       }
 
       if (lease.status !== LeaseStatus.PENDING) {
@@ -326,6 +362,7 @@ export class LeasesService {
         .setLock('pessimistic_write')
         .where('unit.id = :id', { id: unit.id })
         .getOne();
+
       if (!lockedUnit || lockedUnit.status !== UnitStatus.AVAILABLE) {
         throw new ConflictException({
           code: ErrorCode.UNIT_NOT_AVAILABLE,
@@ -384,18 +421,31 @@ export class LeasesService {
         .setLock('pessimistic_write')
         .where('lease.id = :id', { id })
         .getOne();
-      if (!lease) throw new NotFoundException('Lease not found');
+
+      if (!lease) {
+        throw new NotFoundException({
+          code: ErrorCode.LEASE_NOT_FOUND,
+          message: 'Lease not found',
+        });
+      }
 
       const unit = await manager.findOne(Unit, {
         where: { id: lease.unitId },
         relations: { property: true },
       });
-      if (!unit) throw new NotFoundException('Unit not found');
-      if (!unit.property) throw new NotFoundException('Property not found');
 
-      if (!canManageProperty(actor, unit.property)) {
-        throw new ForbiddenException('You do not have access to this lease');
+      if (!unit) {
+        throw new NotFoundException({
+          code: ErrorCode.UNIT_NOT_FOUND,
+          message: 'Unit not found',
+        });
       }
+
+      if (!unit.property)
+        throw new NotFoundException({
+          code: ErrorCode.PROPERTY_NOT_FOUND,
+          message: 'Property not found',
+        });
 
       if (
         lease.status !== LeaseStatus.PENDING &&
@@ -409,7 +459,13 @@ export class LeasesService {
 
       const wasActive = lease.status === LeaseStatus.ACTIVE;
       lease.status = LeaseStatus.TERMINATED;
+
       await manager.save(lease);
+      await manager.update(
+        LeaseRenewalRequest,
+        { leaseId: lease.id, status: LeaseRenewalRequestStatus.PENDING },
+        { status: LeaseRenewalRequestStatus.CANCELLED },
+      );
       if (wasActive) {
         await manager.update(Unit, unit.id, { status: UnitStatus.AVAILABLE });
       }
@@ -475,56 +531,116 @@ export class LeasesService {
         .setLock('pessimistic_write')
         .where('lease.id = :id', { id })
         .getOne();
-      if (!lease) throw new NotFoundException('Lease not found');
+
+      if (!lease) {
+        throw new NotFoundException({
+          code: ErrorCode.LEASE_NOT_FOUND,
+          message: 'Lease not found',
+        });
+      }
 
       const unit = await manager.findOne(Unit, {
         where: { id: lease.unitId },
         relations: { property: true },
       });
-      if (!unit) throw new NotFoundException('Unit not found');
-      if (!unit.property) throw new NotFoundException('Property not found');
+
+      if (!unit) {
+        throw new NotFoundException({
+          code: ErrorCode.UNIT_NOT_FOUND,
+          message: 'Unit not found',
+        });
+      }
+
+      if (!unit.property)
+        throw new NotFoundException({
+          code: ErrorCode.PROPERTY_NOT_FOUND,
+          message: 'Property not found',
+        });
 
       if (!canManageProperty(actor, unit.property)) {
-        throw new ForbiddenException('You do not have access to this lease');
-      }
-
-      if (lease.status !== LeaseStatus.ACTIVE) {
-        throw new ConflictException({
-          code: ErrorCode.LEASE_NOT_ACTIVE,
-          message: 'Only an ACTIVE lease can be renewed',
+        throw new ForbiddenException({
+          code: ErrorCode.PROPERTY_ACCESS_DENIED,
+          message: 'You do not have access to this lease',
         });
       }
 
-      if (dto.endDate <= lease.endDate) {
-        throw new BadRequestException({
-          code: ErrorCode.RENEWAL_END_NOT_AFTER_CURRENT,
-          message: 'endDate must be after the current end date of the lease',
-        });
-      }
-
-      const previousEndDate = lease.endDate;
-      lease.endDate = dto.endDate;
-      await manager.save(lease);
-
-      await this.notifications.create(manager, {
-        recipientId: lease.tenantId,
-        type: NotificationType.LEASE_RENEWED,
-        title: 'Lease renewed',
-        message: `Your lease for unit ${unit.unitNumber} now ends on ${dto.endDate}.`,
-        relatedEntityType: 'Lease',
-        relatedEntityId: lease.id,
-      });
-
-      await this.auditLogs.record(manager, {
-        userId: actor.id,
-        action: AuditAction.LEASE_RENEWED,
-        entity: 'Lease',
-        entityId: lease.id,
-        metadata: { previousEndDate, newEndDate: dto.endDate },
-        ipAddress: ip,
-      });
-
-      return lease;
+      return this.applyRenewal(manager, actor, lease, unit, dto.endDate, ip);
     });
+  }
+
+  /**
+   * Moves the end date of an ACTIVE lease forward inside the caller's
+   * transaction: saves the lease (the exclusion constraint rejects an
+   * overlap), notifies the tenant, writes the audit entry and resolves the
+   * lease's PENDING renewal request, if any, as APPROVED.
+   * Shared by `renew` and by approving a tenant's renewal request. The caller
+   * must already hold the lock on the lease row and have authorized the actor.
+   * @param manager - The transaction manager.
+   * @param actor - The user renewing the lease.
+   * @param lease - The locked lease.
+   * @param unit - The lease's unit, with its property.
+   * @param endDate - The new end date (a real `YYYY-MM-DD` date).
+   * @param ip - The IP address of the user performing the action.
+   * @param renewalRequestId - The approved renewal request, if any.
+   * @returns The renewed lease.
+   * @throws BadRequestException If the date is not after the current end date.
+   * @throws ConflictException If the lease is not ACTIVE.
+   */
+  async applyRenewal(
+    manager: EntityManager,
+    actor: User,
+    lease: Lease,
+    unit: Unit,
+    endDate: string,
+    ip?: string,
+    renewalRequestId?: string,
+  ): Promise<Lease> {
+    if (lease.status !== LeaseStatus.ACTIVE) {
+      throw new ConflictException({
+        code: ErrorCode.LEASE_NOT_ACTIVE,
+        message: 'Only an ACTIVE lease can be renewed',
+      });
+    }
+
+    if (endDate <= lease.endDate) {
+      throw new BadRequestException({
+        code: ErrorCode.RENEWAL_END_NOT_AFTER_CURRENT,
+        message: 'endDate must be after the current end date of the lease',
+      });
+    }
+
+    const previousEndDate = lease.endDate;
+    lease.endDate = endDate;
+    await manager.save(lease);
+
+    await manager.update(
+      LeaseRenewalRequest,
+      { leaseId: lease.id, status: LeaseRenewalRequestStatus.PENDING },
+      { status: LeaseRenewalRequestStatus.APPROVED },
+    );
+
+    await this.notifications.create(manager, {
+      recipientId: lease.tenantId,
+      type: NotificationType.LEASE_RENEWED,
+      title: 'Lease renewed',
+      message: `Your lease for unit ${unit.unitNumber} now ends on ${endDate}.`,
+      relatedEntityType: 'Lease',
+      relatedEntityId: lease.id,
+    });
+
+    await this.auditLogs.record(manager, {
+      userId: actor.id,
+      action: AuditAction.LEASE_RENEWED,
+      entity: 'Lease',
+      entityId: lease.id,
+      metadata: {
+        previousEndDate,
+        newEndDate: endDate,
+        ...(renewalRequestId && { renewalRequestId }),
+      },
+      ipAddress: ip,
+    });
+
+    return lease;
   }
 }

@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import {
   Paginated,
   resolveSort,
@@ -33,6 +33,7 @@ import { RedisService } from '../common/redis/redis.service.js';
 import { UploadService } from '../common/uploads/upload.service.js';
 import { UNIT_MAX_IMAGES } from '../common/uploads/upload.constants.js';
 import { Lease } from '../leases/entities/lease.entity.js';
+import { LeaseStatus } from '../leases/enums/lease-status.enum.js';
 import { RentalRequest } from '../rental-requests/entities/rental-request.entity.js';
 import { MaintenanceRequest } from '../maintenance/entities/maintenance-request.entity.js';
 import { ErrorCode } from '../common/errors/error-code.enum.js';
@@ -77,14 +78,21 @@ export class UnitsService {
       where: { id },
       relations: { property: true },
     });
-    if (!unit?.property) throw new NotFoundException('Unit not found');
+
+    if (!unit?.property)
+      throw new NotFoundException({
+        code: ErrorCode.UNIT_NOT_FOUND,
+        message: 'Unit not found',
+      });
+
     return unit;
   }
 
   /**
    * Retrieves a unit after verifying that the actor has permission
    * to manage the property that owns the unit.
-   * A TENANT can only see AVAILABLE units (anything else is a 404).
+   * A TENANT can see AVAILABLE units, plus any unit on which they hold a
+   * PENDING or ACTIVE lease (their own home); anything else is a 404.
    * @param actor - The user requesting access.
    * @param id - The unique ID of the unit.
    * @returns The unit if the actor is authorized.
@@ -92,18 +100,29 @@ export class UnitsService {
    * @throws ForbiddenException If the actor is not allowed to access the unit.
    */
   async findForActor(actor: User, id: string): Promise<Unit> {
+    if (actor.role === UserRole.TENANT) await this.leaseExpiration.run();
+
     const unit = await this.findOne(id);
 
     if (actor.role === UserRole.TENANT) {
-      if (unit.status !== UnitStatus.AVAILABLE) {
-        throw new NotFoundException('Unit not found');
+      if (
+        unit.status !== UnitStatus.AVAILABLE &&
+        !(await this.hasCurrentLease(actor.id, unit.id))
+      ) {
+        throw new NotFoundException({
+          code: ErrorCode.UNIT_NOT_FOUND,
+          message: 'Unit not found',
+        });
       }
 
       return unit;
     }
 
     if (!canManageProperty(actor, unit.property)) {
-      throw new ForbiddenException('You do not have access to this unit');
+      throw new ForbiddenException({
+        code: ErrorCode.UNIT_ACCESS_DENIED,
+        message: 'You do not have access to this unit',
+      });
     }
 
     return unit;
@@ -305,7 +324,10 @@ export class UnitsService {
         .setLock('pessimistic_write')
         .getOne();
       if (!currentUnit) {
-        throw new NotFoundException('Unit not found');
+        throw new NotFoundException({
+          code: ErrorCode.UNIT_NOT_FOUND,
+          message: 'Unit not found',
+        });
       }
 
       this.assertNotRented(currentUnit, 'removed');
@@ -444,6 +466,7 @@ export class UnitsService {
    */
   async removeImage(actor: User, id: string, publicId: string): Promise<Unit> {
     const unit = await this.findForActor(actor, id);
+
     const image = unit.images.find((img) => img.publicId === publicId);
     if (!image)
       throw new NotFoundException({
@@ -483,6 +506,16 @@ export class UnitsService {
     }
   }
 
+  private hasCurrentLease(tenantId: string, unitId: string): Promise<boolean> {
+    return this.dataSource.getRepository(Lease).exists({
+      where: {
+        tenantId,
+        unitId,
+        status: In([LeaseStatus.PENDING, LeaseStatus.ACTIVE]),
+      },
+    });
+  }
+
   private buildSearchCacheKey(actor: User, query: ListUnitsQueryDto): string {
     const scope =
       actor.role === UserRole.ADMIN
@@ -513,13 +546,6 @@ export class UnitsService {
     return `units:search:${hash}`;
   }
 
-  /**
-   * The Unit -> Lease / RentalRequest / MaintenanceRequest foreign keys are
-   * RESTRICT at the database level — this check exists purely so the client
-   * gets a specific reason instead of a generic 409 from a raw FK violation.
-   * A race between this check and the actual delete is still caught by the
-   * database constraint itself.
-   */
   private async assertNoHistory(
     manager: EntityManager,
     unitId: string,

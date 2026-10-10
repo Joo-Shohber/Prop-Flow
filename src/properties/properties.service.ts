@@ -67,7 +67,13 @@ export class PropertiesService {
    */
   async findOne(id: string): Promise<Property> {
     const property = await this.propertyRepo.findOneBy({ id });
-    if (!property) throw new NotFoundException('Property not found');
+
+    if (!property)
+      throw new NotFoundException({
+        code: ErrorCode.PROPERTY_NOT_FOUND,
+        message: 'Property not found',
+      });
+
     return property;
   }
 
@@ -90,7 +96,10 @@ export class PropertiesService {
     }
 
     if (!canManageProperty(actor, property)) {
-      throw new ForbiddenException('You do not have access to this property');
+      throw new ForbiddenException({
+        code: ErrorCode.PROPERTY_ACCESS_DENIED,
+        message: 'You do not have access to this property',
+      });
     }
     return property;
   }
@@ -414,10 +423,11 @@ export class PropertiesService {
   ): Promise<Property> {
     const property = await this.findForActor(actor, id);
     const image = property.images.find((img) => img.publicId === publicId);
-    if (!image) throw new NotFoundException({
-      code: ErrorCode.IMAGE_NOT_FOUND,
-      message: 'Image not found on this property',
-    });
+    if (!image)
+      throw new NotFoundException({
+        code: ErrorCode.IMAGE_NOT_FOUND,
+        message: 'Image not found on this property',
+      });
 
     const originalImages = property.images;
 

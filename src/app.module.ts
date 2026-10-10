@@ -27,6 +27,7 @@ import { HealthModule } from './health/health.module.js';
 @Module({
   controllers: [AppController],
   imports: [
+    HealthModule,
     RedisModule,
     CacheInvalidationModule,
     RateLimitModule,
@@ -42,7 +43,6 @@ import { HealthModule } from './health/health.module.js';
     NotificationsModule,
     AuditLogsModule,
     AnalyticsModule,
-    HealthModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,
