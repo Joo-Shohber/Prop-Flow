@@ -61,7 +61,10 @@ export class UsersService {
     const user = await this.userRepo.findOneBy({ id });
 
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException({
+        code: ErrorCode.NOT_FOUND,
+        message: 'User not found',
+      });
     }
 
     return user;
@@ -122,6 +125,38 @@ export class UsersService {
    */
   findByGoogleId(googleId: string): Promise<User | null> {
     return this.userRepo.findOneBy({ googleId });
+  }
+
+  /**
+   * Retrieves users with optional filtering, sorting, and pagination.
+   * @param query - Filtering, sorting, and pagination parameters.
+   * @returns A paginated list of users.
+   */
+  async findAll(query: ListUsersQueryDto): Promise<Paginated<User>> {
+    const where: FindOptionsWhere<User> = {};
+
+    const { sortBy, sortOrder } = resolveSort(
+      query,
+      USER_SORT_FIELDS,
+      'createdAt',
+    );
+
+    if (query.role) {
+      where.role = query.role;
+    }
+
+    if (query.isActive !== undefined) {
+      where.isActive = query.isActive;
+    }
+
+    const [data, total] = await this.userRepo.findAndCount({
+      where,
+      order: { [sortBy]: sortOrder } as FindOptionsOrder<User>,
+      skip: toSkip(query),
+      take: query.limit,
+    });
+
+    return Paginated.of(data, total, query);
   }
 
   /**
@@ -208,7 +243,7 @@ export class UsersService {
     if (!file) {
       throw new BadRequestException({
         code: ErrorCode.NO_AVATAR,
-        message: 'You do not have an avatar',
+        message: 'No avatar file provided',
       });
     }
 
@@ -246,38 +281,6 @@ export class UsersService {
     user.avatar = userAvatar;
 
     return this.userRepo.save(user);
-  }
-
-  /**
-   * Retrieves users with optional filtering, sorting, and pagination.
-   * @param query - Filtering, sorting, and pagination parameters.
-   * @returns A paginated list of users.
-   */
-  async findAll(query: ListUsersQueryDto): Promise<Paginated<User>> {
-    const where: FindOptionsWhere<User> = {};
-
-    const { sortBy, sortOrder } = resolveSort(
-      query,
-      USER_SORT_FIELDS,
-      'createdAt',
-    );
-
-    if (query.role) {
-      where.role = query.role;
-    }
-
-    if (query.isActive !== undefined) {
-      where.isActive = query.isActive;
-    }
-
-    const [data, total] = await this.userRepo.findAndCount({
-      where,
-      order: { [sortBy]: sortOrder } as FindOptionsOrder<User>,
-      skip: toSkip(query),
-      take: query.limit,
-    });
-
-    return Paginated.of(data, total, query);
   }
 
   /**
