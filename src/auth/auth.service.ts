@@ -47,7 +47,7 @@ export class AuthService {
     private readonly dataSource: DataSource,
     private readonly refreshTokenCleanup: RefreshTokenCleanupService,
     @InjectRepository(RefreshToken)
-    private readonly refreshTokens: Repository<RefreshToken>,
+    private readonly refreshTokensRepo: Repository<RefreshToken>,
   ) {}
 
   /**
@@ -153,7 +153,7 @@ export class AuthService {
     const tokens = await this.issueTokens(credentials.id, family);
     const user = await this.usersService.findById(credentials.id);
 
-    await this.refreshTokenCleanup.runIfDue();
+    await this.refreshTokenCleanup.clean();
 
     return { user, ...tokens };
   }
@@ -200,7 +200,7 @@ export class AuthService {
     const family = randomUUID();
     const tokens = await this.issueTokens(user.id, family);
 
-    await this.refreshTokenCleanup.runIfDue();
+    await this.refreshTokenCleanup.clean();
 
     return { user, ...tokens };
   }
@@ -215,7 +215,7 @@ export class AuthService {
    */
   async refresh(token: string): Promise<AuthTokens> {
     const payload = await this.verifyRefreshToken(token);
-    const refreshToken = await this.refreshTokens.findOneBy({
+    const refreshToken = await this.refreshTokensRepo.findOneBy({
       id: payload.jti,
     });
 
@@ -245,7 +245,7 @@ export class AuthService {
     if (refreshToken.expiresAt.getTime() <= Date.now()) {
       throw new UnauthorizedException({
         code: ErrorCode.REFRESH_TOKEN_EXPIRED,
-        message: 'Refresh token expired',
+        message: 'Refresh token expired, please log in again',
       });
     }
 
@@ -361,19 +361,13 @@ export class AuthService {
     try {
       const payload = await this.verifyRefreshToken(token);
 
-      await this.refreshTokens.update(
+      await this.refreshTokensRepo.update(
         { family: payload.family, userId: payload.userId, revoked: false },
         { revoked: true },
       );
     } catch {
       // Nothing to do
     }
-  }
-
-  private async sendOtp(email: string, purpose: OtpPurpose): Promise<void> {
-    const code = await this.otpService.issue(purpose, email);
-
-    if (code) await this.emailService.sendOtp(email, code, purpose);
   }
 
   /**
@@ -465,6 +459,12 @@ export class AuthService {
     }
   }
 
+  private async sendOtp(email: string, purpose: OtpPurpose): Promise<void> {
+    const code = await this.otpService.issue(purpose, email);
+
+    if (code) await this.emailService.sendOtp(email, code, purpose);
+  }
+
   private async issueTokens(
     userId: string,
     family: string,
@@ -500,7 +500,7 @@ export class AuthService {
 
     const refreshTokensRepo = manager
       ? manager.getRepository(RefreshToken)
-      : this.refreshTokens;
+      : this.refreshTokensRepo;
 
     await refreshTokensRepo.insert({
       id: jti,
@@ -550,7 +550,7 @@ export class AuthService {
   }
 
   private async revokeFamily(family: string): Promise<void> {
-    await this.refreshTokens.update(
+    await this.refreshTokensRepo.update(
       { family, revoked: false },
       { revoked: true },
     );

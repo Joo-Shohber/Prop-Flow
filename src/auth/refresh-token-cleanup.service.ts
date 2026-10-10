@@ -21,7 +21,7 @@ export class RefreshTokenCleanupService {
    * Removes expired refresh tokens if the hourly lock can be acquired.
    * Errors are logged and swallowed so a login never fails because of cleanup.
    */
-  async runIfDue(): Promise<void> {
+  async clean(): Promise<void> {
     try {
       const acquired = await this.redis.client.set(
         CLEANUP_LOCK_KEY,
