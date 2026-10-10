@@ -16,7 +16,7 @@ import { RentalRequestStatus } from '../enums/rental-request-status.enum.js';
 
 @Entity('rental_requests')
 @Check(`"startDate" < "endDate"`)
-@Index(['tenantId', 'unitId'], {
+@Index('UQ_rental_request_pending_tenant_unit', ['tenantId', 'unitId'], {
   unique: true,
   where: `"status" = 'PENDING'`,
 })

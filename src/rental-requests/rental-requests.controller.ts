@@ -130,4 +130,22 @@ export class RentalRequestsController {
   ): Promise<RentalRequestResponseDto> {
     return this.rentalRequests.reject(actor, id, req.ip);
   }
+
+  @Post(':id/cancel')
+  @HttpCode(HttpStatus.OK)
+  @Roles(UserRole.TENANT)
+  @ApiOperation({
+    summary: 'Withdraw your own PENDING rental request (TENANT)',
+  })
+  @ApiOkResponse({ type: RentalRequestResponseDto })
+  @ApiForbiddenResponse({ description: 'The request belongs to another tenant' })
+  @ApiNotFoundResponse({ description: 'Rental request not found' })
+  @ApiConflictResponse({ description: 'Request is not PENDING' })
+  cancel(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request,
+  ): Promise<RentalRequestResponseDto> {
+    return this.rentalRequests.cancel(actor, id, req.ip);
+  }
 }

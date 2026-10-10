@@ -22,6 +22,7 @@ import { CacheInvalidationModule } from './common/cache/cache-invalidation.modul
 import { RateLimitModule } from './common/throttler/rate-limit.module.js';
 import { RentalRequestsModule } from './rental-requests/rental-requests.module.js';
 import { AppController } from './app.controller.js';
+import { HealthModule } from './health/health.module.js';
 
 @Module({
   controllers: [AppController],
@@ -41,6 +42,7 @@ import { AppController } from './app.controller.js';
     NotificationsModule,
     AuditLogsModule,
     AnalyticsModule,
+    HealthModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,

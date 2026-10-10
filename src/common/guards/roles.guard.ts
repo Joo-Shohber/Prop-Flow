@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { UserRole } from '../../users/enums/user-role.enum.js';
 import { ROLES_KEY } from '../decorators/roles.decorator.js';
 import type { AuthenticatedRequest } from '../types/authenticated-request.type.js';
+import { ErrorCode } from '../errors/error-code.enum.js';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -22,9 +23,10 @@ export class RolesGuard implements CanActivate {
 
     const { user } = context.switchToHttp().getRequest<AuthenticatedRequest>();
     if (!user || !roles.includes(user.role)) {
-      throw new ForbiddenException(
-        'You do not have permission to perform this action',
-      );
+      throw new ForbiddenException({
+        code: ErrorCode.INSUFFICIENT_ROLE,
+        message: 'You do not have permission to perform this action',
+      });
     }
     return true;
   }

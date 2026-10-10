@@ -22,6 +22,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { User, userAvatar } from './entities/user.entity.js';
 import { UserRole } from './enums/user-role.enum.js';
 import { GoogleProfile } from '../auth/google.service.js';
+import { ErrorCode } from '../common/errors/error-code.enum.js';
 
 const USER_SORT_FIELDS = [
   'createdAt',
@@ -205,7 +206,10 @@ export class UsersService {
    */
   async setAvatar(user: User, file?: Express.Multer.File): Promise<User> {
     if (!file) {
-      throw new BadRequestException('You do not have an avatar');
+      throw new BadRequestException({
+        code: ErrorCode.NO_AVATAR,
+        message: 'You do not have an avatar',
+      });
     }
 
     const [uploaded] = await this.uploadService.uploadImages(
@@ -229,7 +233,10 @@ export class UsersService {
    */
   async removeAvatar(user: User): Promise<User> {
     if (user.avatar.source === 'default') {
-      throw new BadRequestException('You have no avatar to remove');
+      throw new BadRequestException({
+        code: ErrorCode.NO_AVATAR,
+        message: 'You have no avatar to remove',
+      });
     }
 
     if (user.avatar.source === 'cloudinary') {
@@ -321,9 +328,10 @@ export class UsersService {
     ip?: string,
   ): Promise<User> {
     if (actor.id === id && !isActive) {
-      throw new UnprocessableEntityException(
-        'You cannot deactivate your own account',
-      );
+      throw new UnprocessableEntityException({
+        code: ErrorCode.CANNOT_DEACTIVATE_SELF,
+        message: 'You cannot deactivate your own account',
+      });
     }
 
     const user = await this.findById(id);
@@ -361,7 +369,10 @@ export class UsersService {
     ip?: string,
   ): Promise<User> {
     if (actor.id === id) {
-      throw new UnprocessableEntityException('You cannot change your own role');
+      throw new UnprocessableEntityException({
+        code: ErrorCode.CANNOT_CHANGE_OWN_ROLE,
+        message: 'You cannot change your own role',
+      });
     }
 
     const user = await this.findById(id);

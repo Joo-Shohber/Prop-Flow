@@ -33,6 +33,7 @@ import { RentalRequestResponseDto } from './dto/rental-request-response.dto.js';
 import { RentalRequest } from './entities/rental-request.entity.js';
 import { RentalRequestStatus } from './enums/rental-request-status.enum.js';
 import { assertValidDateRange, todayIso } from '../common/utils/date.util.js';
+import { ErrorCode } from '../common/errors/error-code.enum.js';
 
 const RENTAL_REQUEST_SORT_FIELDS = [
   'createdAt',
@@ -176,7 +177,10 @@ export class RentalRequestsService {
     assertValidDateRange(dto.startDate, dto.endDate);
 
     if (dto.endDate < todayIso()) {
-      throw new BadRequestException('endDate must not be in the past');
+      throw new BadRequestException({
+        code: ErrorCode.END_DATE_IN_PAST,
+        message: 'endDate must not be in the past',
+      });
     }
 
     const unit = await this.unitRepo.findOne({
@@ -189,7 +193,10 @@ export class RentalRequestsService {
     }
 
     if (unit.status !== UnitStatus.AVAILABLE) {
-      throw new ConflictException('The unit is not available for rent');
+      throw new ConflictException({
+        code: ErrorCode.UNIT_NOT_AVAILABLE,
+        message: 'The unit is not available for rent',
+      });
     }
 
     const hasPending = await this.requestRepo.exists({
@@ -213,9 +220,10 @@ export class RentalRequestsService {
         dto.endDate,
       )
     ) {
-      throw new ConflictException(
-        'The unit is already leased for the requested dates',
-      );
+      throw new ConflictException({
+        code: ErrorCode.LEASE_DATES_OVERLAP,
+        message: 'The unit is already leased for the requested dates',
+      });
     }
 
     const requestId = await this.dataSource.transaction(async (manager) => {
@@ -286,13 +294,17 @@ export class RentalRequestsService {
       const unit = await this.loadManagedUnit(manager, actor, request);
 
       if (request.status !== RentalRequestStatus.PENDING) {
-        throw new ConflictException(
-          'Only a PENDING rental request can be approved',
-        );
+        throw new ConflictException({
+          code: ErrorCode.RENTAL_REQUEST_NOT_PENDING,
+          message: 'Only a PENDING rental request can be approved',
+        });
       }
 
       if (request.endDate < todayIso()) {
-        throw new ConflictException('The requested period has already ended');
+        throw new ConflictException({
+          code: ErrorCode.RENTAL_REQUEST_PERIOD_ENDED,
+          message: 'The requested period has already ended',
+        });
       }
 
       const lockedUnit = await manager
@@ -302,7 +314,10 @@ export class RentalRequestsService {
         .getOne();
 
       if (!lockedUnit || lockedUnit.status !== UnitStatus.AVAILABLE) {
-        throw new ConflictException('The unit is not AVAILABLE');
+        throw new ConflictException({
+          code: ErrorCode.UNIT_NOT_AVAILABLE,
+          message: 'The unit is not AVAILABLE',
+        });
       }
 
       const tenant = await manager.findOne(User, {
@@ -312,9 +327,10 @@ export class RentalRequestsService {
       });
 
       if (!tenant || !tenant.isActive || tenant.role !== UserRole.TENANT) {
-        throw new ConflictException(
-          'The requesting tenant is no longer an active tenant',
-        );
+        throw new ConflictException({
+          code: ErrorCode.TENANT_NOT_ACTIVE,
+          message: 'The requesting tenant is no longer an active tenant',
+        });
       }
 
       if (
@@ -325,9 +341,10 @@ export class RentalRequestsService {
           request.endDate,
         )
       ) {
-        throw new ConflictException(
-          'The unit is already leased for the requested dates',
-        );
+        throw new ConflictException({
+          code: ErrorCode.LEASE_DATES_OVERLAP,
+          message: 'The unit is already leased for the requested dates',
+        });
       }
 
       const lease = manager.create(Lease, {
@@ -395,9 +412,10 @@ export class RentalRequestsService {
       const unit = await this.loadManagedUnit(manager, actor, request);
 
       if (request.status !== RentalRequestStatus.PENDING) {
-        throw new ConflictException(
-          'Only a PENDING rental request can be rejected',
-        );
+        throw new ConflictException({
+          code: ErrorCode.RENTAL_REQUEST_NOT_PENDING,
+          message: 'Only a PENDING rental request can be rejected',
+        });
       }
 
       request.status = RentalRequestStatus.REJECTED;
@@ -420,6 +438,74 @@ export class RentalRequestsService {
         metadata: {
           unitId: unit.id,
         },
+        ipAddress: ip,
+      });
+
+      return request.id;
+    });
+
+    return RentalRequestResponseDto.fromEntity(await this.findOne(requestId));
+  }
+
+  /**
+   * Withdraws a PENDING rental request.
+   * Only the tenant who created the request can cancel it. The request row is
+   * locked so a concurrent approve/reject and the cancellation cannot both
+   * succeed. The unique "one PENDING request per tenant and unit" rule no
+   * longer applies afterwards, so the tenant may request the unit again.
+   * @param actor - The tenant cancelling the request.
+   * @param id - The unique identifier of the rental request.
+   * @returns The cancelled rental request.
+   * @throws NotFoundException If the request (or its property) does not exist.
+   * @throws ForbiddenException If the request belongs to another tenant.
+   * @throws ConflictException If the request is not PENDING.
+   */
+  async cancel(
+    actor: User,
+    id: string,
+    ip?: string,
+  ): Promise<RentalRequestResponseDto> {
+    const requestId = await this.dataSource.transaction(async (manager) => {
+      const request = await this.lockRequest(manager, id);
+
+      if (request.tenantId !== actor.id) {
+        throw new ForbiddenException('You do not have access to this request');
+      }
+
+      const unit = await manager.findOne(Unit, {
+        where: { id: request.unitId },
+        relations: { property: true },
+      });
+
+      if (!unit?.property) {
+        throw new NotFoundException('Rental request not found');
+      }
+
+      if (request.status !== RentalRequestStatus.PENDING) {
+        throw new ConflictException({
+          code: ErrorCode.RENTAL_REQUEST_NOT_PENDING,
+          message: 'Only a PENDING rental request can be cancelled',
+        });
+      }
+
+      request.status = RentalRequestStatus.CANCELLED;
+      await manager.save(request);
+
+      await this.notifications.create(manager, {
+        recipientId: unit.property.ownerId,
+        type: NotificationType.RENTAL_REQUEST_CANCELLED,
+        title: 'Rental request withdrawn',
+        message: `A tenant withdrew their rental request for unit ${unit.unitNumber}.`,
+        relatedEntityType: 'RentalRequest',
+        relatedEntityId: request.id,
+      });
+
+      await this.auditLogs.record(manager, {
+        userId: actor.id,
+        action: AuditAction.RENTAL_REQUEST_CANCELLED,
+        entity: 'RentalRequest',
+        entityId: request.id,
+        metadata: { unitId: unit.id },
         ipAddress: ip,
       });
 

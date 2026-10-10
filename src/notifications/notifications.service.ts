@@ -45,6 +45,35 @@ export class NotificationsService {
   }
 
   /**
+   * Create the same notification for several recipients in one insert.
+   * Duplicate recipient IDs are ignored; an empty list is a no-op.
+   * This method is called inside a business transaction, like `create`.
+   * @param manager Transaction manager used to insert the notifications.
+   * @param recipientIds IDs of the users to notify.
+   * @param data Notification content shared by all recipients.
+   */
+  async createMany(
+    manager: EntityManager,
+    recipientIds: string[],
+    data: Omit<CreateNotificationData, 'recipientId'>,
+  ): Promise<void> {
+    const recipients = [...new Set(recipientIds)];
+    if (!recipients.length) return;
+
+    await manager.insert(
+      Notification,
+      recipients.map((recipientId) => ({
+        recipientId,
+        type: data.type,
+        title: data.title,
+        message: data.message,
+        relatedEntityType: data.relatedEntityType ?? null,
+        relatedEntityId: data.relatedEntityId ?? null,
+      })),
+    );
+  }
+
+  /**
    * Get the authenticated user's notifications.
    * @param actor Authenticated user requesting the notifications.
    * @param query Pagination and unread filter options.

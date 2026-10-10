@@ -23,11 +23,14 @@ import { UnitsService } from '../units/units.service.js';
 import { User } from '../users/entities/user.entity.js';
 import { UserRole } from '../users/enums/user-role.enum.js';
 import { UsersService } from '../users/users.service.js';
+import { isRealDate } from '../common/utils/date.util.js';
 import { CreateLeaseDto } from './dto/create-lease.dto.js';
 import { ListLeasesQueryDto } from './dto/list-leases-query.dto.js';
+import { RenewLeaseDto } from './dto/renew-lease.dto.js';
 import { UpdateLeaseDto } from './dto/update-lease.dto.js';
 import { Lease } from './entities/lease.entity.js';
 import { LeaseStatus } from './enums/lease-status.enum.js';
+import { ErrorCode } from '../common/errors/error-code.enum.js';
 import { AuditAction } from '../audit-logs/enums/audit-action.enum.js';
 import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 import { NotificationType } from '../notifications/enums/notification-type.enum.js';
@@ -175,16 +178,20 @@ export class LeasesService {
     await this.leaseExpiration.run();
 
     if (dto.startDate >= dto.endDate) {
-      throw new BadRequestException('startDate must be before endDate');
+      throw new BadRequestException({
+        code: ErrorCode.INVALID_DATE_RANGE,
+        message: 'startDate must be before endDate',
+      });
     }
 
     const unit = await this.unitsService.findForActor(actor, dto.unitId);
 
     const tenant = await this.usersService.findById(dto.tenantId);
     if (!tenant || tenant.role !== UserRole.TENANT || !tenant.isActive) {
-      throw new BadRequestException(
-        'tenantId must be an active user with the TENANT role',
-      );
+      throw new BadRequestException({
+        code: ErrorCode.TENANT_NOT_ACTIVE,
+        message: 'tenantId must be an active user with the TENANT role',
+      });
     }
 
     return this.dataSource.transaction(async (manager) => {
@@ -198,7 +205,10 @@ export class LeasesService {
         throw new NotFoundException('Unit not found');
       }
       if (lockedUnit.status !== UnitStatus.AVAILABLE) {
-        throw new ConflictException('The unit is not AVAILABLE');
+        throw new ConflictException({
+          code: ErrorCode.UNIT_NOT_AVAILABLE,
+          message: 'The unit is not AVAILABLE',
+        });
       }
 
       const lease = manager.create(Lease, {
@@ -250,13 +260,19 @@ export class LeasesService {
     const lease = await this.findForActor(actor, id);
 
     if (lease.status !== LeaseStatus.PENDING) {
-      throw new ConflictException('Only a PENDING lease can be updated');
+      throw new ConflictException({
+        code: ErrorCode.LEASE_NOT_PENDING,
+        message: 'Only a PENDING lease can be updated',
+      });
     }
 
     const startDate = dto.startDate ?? lease.startDate;
     const endDate = dto.endDate ?? lease.endDate;
     if (startDate >= endDate) {
-      throw new BadRequestException('startDate must be before endDate');
+      throw new BadRequestException({
+        code: ErrorCode.INVALID_DATE_RANGE,
+        message: 'startDate must be before endDate',
+      });
     }
 
     this.leaseRepo.merge(lease, { ...dto, startDate, endDate });
@@ -299,7 +315,10 @@ export class LeasesService {
       }
 
       if (lease.status !== LeaseStatus.PENDING) {
-        throw new ConflictException('Only a PENDING lease can be activated');
+        throw new ConflictException({
+          code: ErrorCode.LEASE_NOT_PENDING,
+          message: 'Only a PENDING lease can be activated',
+        });
       }
 
       const lockedUnit = await manager
@@ -308,7 +327,10 @@ export class LeasesService {
         .where('unit.id = :id', { id: unit.id })
         .getOne();
       if (!lockedUnit || lockedUnit.status !== UnitStatus.AVAILABLE) {
-        throw new ConflictException('The unit is not AVAILABLE');
+        throw new ConflictException({
+          code: ErrorCode.UNIT_NOT_AVAILABLE,
+          message: 'The unit is not AVAILABLE',
+        });
       }
 
       lease.status = LeaseStatus.ACTIVE;
@@ -379,9 +401,10 @@ export class LeasesService {
         lease.status !== LeaseStatus.PENDING &&
         lease.status !== LeaseStatus.ACTIVE
       ) {
-        throw new ConflictException(
-          'Only a PENDING or ACTIVE lease can be terminated',
-        );
+        throw new ConflictException({
+          code: ErrorCode.LEASE_NOT_TERMINABLE,
+          message: 'Only a PENDING or ACTIVE lease can be terminated',
+        });
       }
 
       const wasActive = lease.status === LeaseStatus.ACTIVE;
@@ -413,5 +436,95 @@ export class LeasesService {
 
     await this.cache.invalidateUnitsAndDashboard();
     return terminated;
+  }
+
+  /**
+   * Renews an active lease by moving its end date forward.
+   * The lease keeps its identity, tenant and rent; the previous end date is
+   * kept in the audit log. The lease row is locked, and the database
+   * exclusion constraint rejects an end date that would overlap another
+   * PENDING/ACTIVE lease of the unit. A lease whose end date has already
+   * passed is EXPIRED and cannot be renewed: create a new lease instead.
+   * @param actor - The user renewing the lease.
+   * @param id - The unique identifier of the lease.
+   * @param dto - The new end date.
+   * @returns The renewed lease.
+   * @throws NotFoundException If the lease, unit or property does not exist.
+   * @throws ForbiddenException If the actor cannot manage the property.
+   * @throws BadRequestException If the date is invalid or not after the current end date.
+   * @throws ConflictException If the lease is not ACTIVE or the new period overlaps another lease.
+   */
+  async renew(
+    actor: User,
+    id: string,
+    dto: RenewLeaseDto,
+    ip?: string,
+  ): Promise<Lease> {
+    await this.leaseExpiration.run();
+
+    if (!isRealDate(dto.endDate)) {
+      throw new BadRequestException({
+        code: ErrorCode.INVALID_DATE,
+        message: 'endDate must be a valid date (YYYY-MM-DD)',
+      });
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const lease = await manager
+        .createQueryBuilder(Lease, 'lease')
+        .setLock('pessimistic_write')
+        .where('lease.id = :id', { id })
+        .getOne();
+      if (!lease) throw new NotFoundException('Lease not found');
+
+      const unit = await manager.findOne(Unit, {
+        where: { id: lease.unitId },
+        relations: { property: true },
+      });
+      if (!unit) throw new NotFoundException('Unit not found');
+      if (!unit.property) throw new NotFoundException('Property not found');
+
+      if (!canManageProperty(actor, unit.property)) {
+        throw new ForbiddenException('You do not have access to this lease');
+      }
+
+      if (lease.status !== LeaseStatus.ACTIVE) {
+        throw new ConflictException({
+          code: ErrorCode.LEASE_NOT_ACTIVE,
+          message: 'Only an ACTIVE lease can be renewed',
+        });
+      }
+
+      if (dto.endDate <= lease.endDate) {
+        throw new BadRequestException({
+          code: ErrorCode.RENEWAL_END_NOT_AFTER_CURRENT,
+          message: 'endDate must be after the current end date of the lease',
+        });
+      }
+
+      const previousEndDate = lease.endDate;
+      lease.endDate = dto.endDate;
+      await manager.save(lease);
+
+      await this.notifications.create(manager, {
+        recipientId: lease.tenantId,
+        type: NotificationType.LEASE_RENEWED,
+        title: 'Lease renewed',
+        message: `Your lease for unit ${unit.unitNumber} now ends on ${dto.endDate}.`,
+        relatedEntityType: 'Lease',
+        relatedEntityId: lease.id,
+      });
+
+      await this.auditLogs.record(manager, {
+        userId: actor.id,
+        action: AuditAction.LEASE_RENEWED,
+        entity: 'Lease',
+        entityId: lease.id,
+        metadata: { previousEndDate, newEndDate: dto.endDate },
+        ipAddress: ip,
+      });
+
+      return lease;
+    });
   }
 }

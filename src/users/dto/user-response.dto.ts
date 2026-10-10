@@ -3,9 +3,7 @@ import { UserRole } from '../enums/user-role.enum.js';
 
 class ImageRefDto {
   @ApiProperty() url: string;
-
   @ApiProperty() publicId: string;
-
   @ApiProperty() source: string;
 }
 

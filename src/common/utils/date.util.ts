@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { ErrorCode } from '../errors/error-code.enum.js';
 
 export const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
@@ -13,10 +14,16 @@ export function isRealDate(value: string): boolean {
 
 export function assertValidDateRange(startDate: string, endDate: string): void {
   if (!isRealDate(startDate) || !isRealDate(endDate)) {
-    throw new BadRequestException('startDate and endDate must be valid dates');
+    throw new BadRequestException({
+      code: ErrorCode.INVALID_DATE,
+      message: 'startDate and endDate must be valid dates',
+    });
   }
 
   if (startDate >= endDate) {
-    throw new BadRequestException('startDate must be before endDate');
+    throw new BadRequestException({
+      code: ErrorCode.INVALID_DATE_RANGE,
+      message: 'startDate must be before endDate',
+    });
   }
 }

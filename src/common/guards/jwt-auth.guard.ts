@@ -11,6 +11,7 @@ import { AccessTokenPayload } from '../../auth/types/token.types.js';
 import { UsersService } from '../../users/users.service.js';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
 import type { AuthenticatedRequest } from '../types/authenticated-request.type.js';
+import { ErrorCode } from '../errors/error-code.enum.js';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -30,7 +31,10 @@ export class JwtAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = this.extractToken(request);
-    if (!token) throw new UnauthorizedException('Missing access token');
+    if (!token) throw new UnauthorizedException({
+      code: ErrorCode.ACCESS_TOKEN_MISSING,
+      message: 'Missing access token',
+    });
 
     let payload: AccessTokenPayload;
     try {
@@ -40,19 +44,31 @@ export class JwtAuthGuard implements CanActivate {
       });
     } catch (error) {
       if (error instanceof TokenExpiredError) {
-        throw new UnauthorizedException('Expired access token');
+        throw new UnauthorizedException({
+          code: ErrorCode.ACCESS_TOKEN_EXPIRED,
+          message: 'Expired access token',
+        });
       }
 
-      throw new UnauthorizedException('Invalid access token');
+      throw new UnauthorizedException({
+        code: ErrorCode.ACCESS_TOKEN_INVALID,
+        message: 'Invalid access token',
+      });
     }
 
     if (typeof payload.userId !== 'string') {
-      throw new UnauthorizedException('Invalid access token');
+      throw new UnauthorizedException({
+        code: ErrorCode.ACCESS_TOKEN_INVALID,
+        message: 'Invalid access token',
+      });
     }
 
     const user = await this.users.findById(payload.userId);
     if (!user || !user.isActive) {
-      throw new UnauthorizedException('Account is not active');
+      throw new UnauthorizedException({
+        code: ErrorCode.ACCOUNT_INACTIVE,
+        message: 'Account is not active',
+      });
     }
 
     request.user = user;

@@ -39,6 +39,7 @@ import { UpdatePropertyDto } from './dto/update-property.dto.js';
 import { Property } from './entities/property.entity.js';
 import { RentalRequest } from '../rental-requests/entities/rental-request.entity.js';
 import { RentalRequestStatus } from '../rental-requests/enums/rental-request-status.enum.js';
+import { ErrorCode } from '../common/errors/error-code.enum.js';
 
 const PROPERTY_SORT_FIELDS = ['createdAt', 'name', 'city'] as const;
 const DEFAULT_UNIT_NUMBER = '1';
@@ -146,17 +147,19 @@ export class PropertiesService {
     let resolvedOwnerId = actor.id;
 
     if (actor.role === UserRole.ADMIN && !ownerId) {
-      throw new BadRequestException(
-        'ownerId is required when an admin creates a property',
-      );
+      throw new BadRequestException({
+        code: ErrorCode.OWNER_REQUIRED,
+        message: 'ownerId is required when an admin creates a property',
+      });
     }
 
     if (actor.role === UserRole.ADMIN && ownerId) {
       const owner = await this.usersService.findById(ownerId);
       if (!owner || owner.role !== UserRole.OWNER || !owner.isActive) {
-        throw new BadRequestException(
-          'ownerId must be an active user with the OWNER role',
-        );
+        throw new BadRequestException({
+          code: ErrorCode.OWNER_INVALID,
+          message: 'ownerId must be an active user with the OWNER role',
+        });
       }
       resolvedOwnerId = ownerId;
     }
@@ -241,9 +244,10 @@ export class PropertiesService {
         where: { propertyId: property.id, status: UnitStatus.RENTED },
       });
       if (rentedCount > 0) {
-        throw new ConflictException(
-          'Cannot delete a property with rented units',
-        );
+        throw new ConflictException({
+          code: ErrorCode.PROPERTY_HAS_RENTED_UNITS,
+          message: 'Cannot delete a property with rented units',
+        });
       }
 
       const pendingLeases = await manager
@@ -357,12 +361,16 @@ export class PropertiesService {
     const property = await this.findForActor(actor, id);
 
     if (!files?.length) {
-      throw new BadRequestException('At least one image is required');
+      throw new BadRequestException({
+        code: ErrorCode.IMAGE_REQUIRED,
+        message: 'At least one image is required',
+      });
     }
     if (property.images.length + files.length > PROPERTY_MAX_IMAGES) {
-      throw new ConflictException(
-        `A property can have at most ${PROPERTY_MAX_IMAGES} images`,
-      );
+      throw new ConflictException({
+        code: ErrorCode.IMAGE_LIMIT_EXCEEDED,
+        message: `A property can have at most ${PROPERTY_MAX_IMAGES} images`,
+      });
     }
 
     const uploadedImages = await this.uploadService.uploadImages(
@@ -406,7 +414,10 @@ export class PropertiesService {
   ): Promise<Property> {
     const property = await this.findForActor(actor, id);
     const image = property.images.find((img) => img.publicId === publicId);
-    if (!image) throw new NotFoundException('Image not found on this property');
+    if (!image) throw new NotFoundException({
+      code: ErrorCode.IMAGE_NOT_FOUND,
+      message: 'Image not found on this property',
+    });
 
     const originalImages = property.images;
 

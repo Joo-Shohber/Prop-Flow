@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { PaginationQueryDto, SortOrder } from './pagination-query.dto.js';
+import { ErrorCode } from '../errors/error-code.enum.js';
 
 export interface PaginationMeta {
   page: number;
@@ -44,9 +45,10 @@ export function resolveSort<T extends string>(
 ): { sortBy: T; sortOrder: 'ASC' | 'DESC' } {
   const sortBy = query.sortBy ?? fallback;
   if (!allowed.includes(sortBy as T)) {
-    throw new BadRequestException(
-      `sortBy must be one of: ${allowed.join(', ')}`,
-    );
+    throw new BadRequestException({
+      code: ErrorCode.INVALID_SORT_FIELD,
+      message: `sortBy must be one of: ${allowed.join(', ')}`,
+    });
   }
   return {
     sortBy: sortBy as T,

@@ -32,6 +32,7 @@ import { UserRole } from '../users/enums/user-role.enum.js';
 import { CreateLeaseDto } from './dto/create-lease.dto.js';
 import { LeaseResponseDto } from './dto/lease-response.dto.js';
 import { ListLeasesQueryDto } from './dto/list-leases-query.dto.js';
+import { RenewLeaseDto } from './dto/renew-lease.dto.js';
 import { UpdateLeaseDto } from './dto/update-lease.dto.js';
 import { Lease } from './entities/lease.entity.js';
 import { LeasesService } from './leases.service.js';
@@ -147,5 +148,29 @@ export class LeasesController {
     @Req() req: Request,
   ): Promise<Lease> {
     return this.leases.terminate(actor, id, req.ip);
+  }
+
+  @Post(':id/renew')
+  @HttpCode(HttpStatus.OK)
+  @Roles(...MANAGE_ROLES)
+  @ApiOperation({
+    summary: 'Renew an ACTIVE lease by moving its end date forward',
+  })
+  @ApiOkResponse({ type: LeaseResponseDto })
+  @ApiBadRequestResponse({
+    description: 'Invalid date, or not after the current end date',
+  })
+  @ApiForbiddenResponse({ description: 'No access to this lease' })
+  @ApiNotFoundResponse({ description: 'Lease not found' })
+  @ApiConflictResponse({
+    description: 'Lease is not ACTIVE, or the new period overlaps another lease',
+  })
+  renew(
+    @CurrentUser() actor: User,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RenewLeaseDto,
+    @Req() req: Request,
+  ): Promise<Lease> {
+    return this.leases.renew(actor, id, dto, req.ip);
   }
 }

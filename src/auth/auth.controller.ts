@@ -39,6 +39,7 @@ import {
   clearRefreshTokenCookie,
   setRefreshTokenCookie,
 } from './utils/refresh-cookie.util.js';
+import { ErrorCode } from '../common/errors/error-code.enum.js';
 
 @ApiTags('Auth')
 @Public()
@@ -132,7 +133,10 @@ export class AuthController {
     const token = req.cookies?.[REFRESH_TOKEN_COOKIE];
 
     if (!token) {
-      throw new UnauthorizedException('Missing refresh token');
+      throw new UnauthorizedException({
+        code: ErrorCode.REFRESH_TOKEN_MISSING,
+        message: 'Missing refresh token',
+      });
     }
 
     const { refreshToken, ...body } = await this.authService.refresh(token);

@@ -35,6 +35,7 @@ import { UNIT_MAX_IMAGES } from '../common/uploads/upload.constants.js';
 import { Lease } from '../leases/entities/lease.entity.js';
 import { RentalRequest } from '../rental-requests/entities/rental-request.entity.js';
 import { MaintenanceRequest } from '../maintenance/entities/maintenance-request.entity.js';
+import { ErrorCode } from '../common/errors/error-code.enum.js';
 
 const UNIT_SORT_FIELDS = [
   'createdAt',
@@ -346,14 +347,16 @@ export class UnitsService {
     const unit = await this.findForActor(actor, id);
 
     if (unit.status === UnitStatus.RENTED) {
-      throw new ConflictException(
-        'A rented unit can only change status through the lease flow',
-      );
+      throw new ConflictException({
+        code: ErrorCode.UNIT_RENTED,
+        message: 'A rented unit can only change status through the lease flow',
+      });
     }
     if (MANUAL_TRANSITIONS[unit.status] !== status) {
-      throw new ConflictException(
-        `Cannot change status from ${unit.status} to ${status}`,
-      );
+      throw new ConflictException({
+        code: ErrorCode.UNIT_STATUS_TRANSITION_INVALID,
+        message: `Cannot change status from ${unit.status} to ${status}`,
+      });
     }
 
     const previousStatus = unit.status;
@@ -394,12 +397,16 @@ export class UnitsService {
     const unit = await this.findForActor(actor, id);
 
     if (!files?.length) {
-      throw new BadRequestException('At least one image is required');
+      throw new BadRequestException({
+        code: ErrorCode.IMAGE_REQUIRED,
+        message: 'At least one image is required',
+      });
     }
     if (unit.images.length + files.length > UNIT_MAX_IMAGES) {
-      throw new ConflictException(
-        `A unit can have at most ${UNIT_MAX_IMAGES} images`,
-      );
+      throw new ConflictException({
+        code: ErrorCode.IMAGE_LIMIT_EXCEEDED,
+        message: `A unit can have at most ${UNIT_MAX_IMAGES} images`,
+      });
     }
 
     const uploaded = await this.uploadService.uploadImages(
@@ -438,7 +445,11 @@ export class UnitsService {
   async removeImage(actor: User, id: string, publicId: string): Promise<Unit> {
     const unit = await this.findForActor(actor, id);
     const image = unit.images.find((img) => img.publicId === publicId);
-    if (!image) throw new NotFoundException('Image not found on this unit');
+    if (!image)
+      throw new NotFoundException({
+        code: ErrorCode.IMAGE_NOT_FOUND,
+        message: 'Image not found on this unit',
+      });
 
     const originalImages = unit.images;
     unit.images = unit.images.filter((img) => img.publicId !== publicId);
@@ -465,7 +476,10 @@ export class UnitsService {
 
   private assertNotRented(unit: Unit, action: 'updated' | 'removed'): void {
     if (unit.status === UnitStatus.RENTED) {
-      throw new ConflictException(`A rented unit cannot be ${action}`);
+      throw new ConflictException({
+        code: ErrorCode.UNIT_RENTED,
+        message: `A rented unit cannot be ${action}`,
+      });
     }
   }
 
@@ -512,27 +526,30 @@ export class UnitsService {
   ): Promise<void> {
     const leaseCount = await manager.count(Lease, { where: { unitId } });
     if (leaseCount > 0) {
-      throw new ConflictException(
-        'Cannot delete a unit that has lease history',
-      );
+      throw new ConflictException({
+        code: ErrorCode.UNIT_HAS_LEASES,
+        message: 'Cannot delete a unit that has lease history',
+      });
     }
 
     const rentalRequestCount = await manager.count(RentalRequest, {
       where: { unitId },
     });
     if (rentalRequestCount > 0) {
-      throw new ConflictException(
-        'Cannot delete a unit that has rental request history',
-      );
+      throw new ConflictException({
+        code: ErrorCode.UNIT_HAS_RENTAL_REQUESTS,
+        message: 'Cannot delete a unit that has rental request history',
+      });
     }
 
     const maintenanceCount = await manager.count(MaintenanceRequest, {
       where: { unitId },
     });
     if (maintenanceCount > 0) {
-      throw new ConflictException(
-        'Cannot delete a unit that has maintenance request history',
-      );
+      throw new ConflictException({
+        code: ErrorCode.UNIT_HAS_MAINTENANCE_REQUESTS,
+        message: 'Cannot delete a unit that has maintenance request history',
+      });
     }
   }
 }

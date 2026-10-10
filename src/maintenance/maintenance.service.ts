@@ -37,8 +37,23 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service.js';
 import { NotificationType } from '../notifications/enums/notification-type.enum.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { CacheInvalidationService } from '../common/cache/cache-invalidation.service.js';
+import { ErrorCode } from '../common/errors/error-code.enum.js';
 
 const MAINTENANCE_SORT_FIELDS = ['createdAt', 'priority', 'status'] as const;
+
+/**
+ * The people involved in a request other than the actor: the tenant, the
+ * property owner and the assigned staff member (if any).
+ */
+function otherParticipants(
+  actor: User,
+  request: MaintenanceRequest,
+  ownerId: string,
+): string[] {
+  return [request.tenantId, ownerId, request.assignedStaffId].filter(
+    (userId): userId is string => !!userId && userId !== actor.id,
+  );
+}
 
 @Injectable()
 export class MaintenanceService {
@@ -185,9 +200,10 @@ export class MaintenanceService {
         );
 
         if (!lease) {
-          throw new BadRequestException(
-            'You do not have an active lease for this unit',
-          );
+          throw new BadRequestException({
+            code: ErrorCode.NO_ACTIVE_LEASE,
+            message: 'You do not have an active lease for this unit',
+          });
         }
 
         const unit = await this.loadUnit(manager, dto.unitId);
@@ -251,9 +267,10 @@ export class MaintenanceService {
       staff.role !== UserRole.MAINTENANCE_STAFF ||
       !staff.isActive
     ) {
-      throw new BadRequestException(
-        'assignedStaffId must be an active user with the MAINTENANCE_STAFF role',
-      );
+      throw new BadRequestException({
+        code: ErrorCode.STAFF_INVALID,
+        message: 'assignedStaffId must be an active user with the MAINTENANCE_STAFF role',
+      });
     }
 
     const assigned = await this.dataSource.transaction(async (manager) => {
@@ -267,7 +284,10 @@ export class MaintenanceService {
       }
 
       if (request.status !== MaintenanceStatus.OPEN) {
-        throw new ConflictException('Only an OPEN request can be assigned');
+        throw new ConflictException({
+          code: ErrorCode.MAINTENANCE_INVALID_STATE,
+          message: 'Only an OPEN request can be assigned',
+        });
       }
 
       const previousStatus = request.status;
@@ -338,13 +358,17 @@ export class MaintenanceService {
       const request = await this.lock(manager, id);
 
       if (request.assignedStaffId !== actor.id) {
-        throw new ForbiddenException(
-          'Only the assigned staff member can start this request',
-        );
+        throw new ForbiddenException({
+          code: ErrorCode.NOT_ASSIGNED_STAFF,
+          message: 'Only the assigned staff member can start this request',
+        });
       }
 
       if (request.status !== MaintenanceStatus.ASSIGNED) {
-        throw new ConflictException('Only an ASSIGNED request can be started');
+        throw new ConflictException({
+          code: ErrorCode.MAINTENANCE_INVALID_STATE,
+          message: 'Only an ASSIGNED request can be started',
+        });
       }
 
       const previousStatus = request.status;
@@ -358,6 +382,20 @@ export class MaintenanceService {
         request.status,
         actor.id,
         dto.notes,
+      );
+
+      const unit = await this.loadUnit(manager, request.unitId);
+
+      await this.notificationsService.createMany(
+        manager,
+        otherParticipants(actor, request, unit.property.ownerId),
+        {
+          type: NotificationType.MAINTENANCE_STARTED,
+          title: 'Work on a maintenance request has started',
+          message: `Work has started on "${request.title}" for unit ${unit.unitNumber}.`,
+          relatedEntityType: 'MaintenanceRequest',
+          relatedEntityId: request.id,
+        },
       );
 
       return request;
@@ -399,15 +437,17 @@ export class MaintenanceService {
         const request = await this.lock(manager, id);
 
         if (request.assignedStaffId !== actor.id) {
-          throw new ForbiddenException(
-            'Only the assigned staff member can complete this request',
-          );
+          throw new ForbiddenException({
+            code: ErrorCode.NOT_ASSIGNED_STAFF,
+            message: 'Only the assigned staff member can complete this request',
+          });
         }
 
         if (request.status !== MaintenanceStatus.IN_PROGRESS) {
-          throw new ConflictException(
-            'Only an IN_PROGRESS request can be completed',
-          );
+          throw new ConflictException({
+            code: ErrorCode.MAINTENANCE_INVALID_STATE,
+            message: 'Only an IN_PROGRESS request can be completed',
+          });
         }
 
         const previousStatus = request.status;
@@ -500,7 +540,10 @@ export class MaintenanceService {
       }
 
       if (request.status !== MaintenanceStatus.RESOLVED) {
-        throw new ConflictException('Only a RESOLVED request can be closed');
+        throw new ConflictException({
+          code: ErrorCode.MAINTENANCE_INVALID_STATE,
+          message: 'Only a RESOLVED request can be closed',
+        });
       }
 
       const previousStatus = request.status;
@@ -514,6 +557,18 @@ export class MaintenanceService {
         request.status,
         actor.id,
         dto.notes,
+      );
+
+      await this.notificationsService.createMany(
+        manager,
+        otherParticipants(actor, request, unit.property.ownerId),
+        {
+          type: NotificationType.MAINTENANCE_CLOSED,
+          title: 'Maintenance request closed',
+          message: `"${request.title}" on unit ${unit.unitNumber} was closed.`,
+          relatedEntityType: 'MaintenanceRequest',
+          relatedEntityId: request.id,
+        },
       );
 
       return request;
@@ -558,9 +613,10 @@ export class MaintenanceService {
         request.status !== MaintenanceStatus.OPEN &&
         request.status !== MaintenanceStatus.ASSIGNED
       ) {
-        throw new ConflictException(
-          'Only an OPEN or ASSIGNED request can be cancelled',
-        );
+        throw new ConflictException({
+          code: ErrorCode.MAINTENANCE_INVALID_STATE,
+          message: 'Only an OPEN or ASSIGNED request can be cancelled',
+        });
       }
 
       const previousStatus = request.status;
@@ -574,6 +630,18 @@ export class MaintenanceService {
         request.status,
         actor.id,
         dto.notes,
+      );
+
+      await this.notificationsService.createMany(
+        manager,
+        otherParticipants(actor, request, unit.property.ownerId),
+        {
+          type: NotificationType.MAINTENANCE_CANCELLED,
+          title: 'Maintenance request cancelled',
+          message: `"${request.title}" on unit ${unit.unitNumber} was cancelled.`,
+          relatedEntityType: 'MaintenanceRequest',
+          relatedEntityId: request.id,
+        },
       );
 
       return request;
@@ -628,19 +696,24 @@ export class MaintenanceService {
     }
 
     if (request.status !== MaintenanceStatus.OPEN) {
-      throw new ConflictException(
-        'Images can only be added while the request is OPEN',
-      );
+      throw new ConflictException({
+        code: ErrorCode.MAINTENANCE_INVALID_STATE,
+        message: 'Images can only be added while the request is OPEN',
+      });
     }
 
     if (!files?.length) {
-      throw new BadRequestException('At least one image is required');
+      throw new BadRequestException({
+        code: ErrorCode.IMAGE_REQUIRED,
+        message: 'At least one image is required',
+      });
     }
 
     if (request.images.length + files.length > MAINTENANCE_MAX_IMAGES) {
-      throw new ConflictException(
-        `A request can have at most ${MAINTENANCE_MAX_IMAGES} images`,
-      );
+      throw new ConflictException({
+        code: ErrorCode.IMAGE_LIMIT_EXCEEDED,
+        message: `A request can have at most ${MAINTENANCE_MAX_IMAGES} images`,
+      });
     }
 
     const uploaded = await this.uploadService.uploadImages(
@@ -654,14 +727,16 @@ export class MaintenanceService {
         const locked = await this.lock(manager, id);
 
         if (locked.status !== MaintenanceStatus.OPEN)
-          throw new ConflictException(
-            'Images can only be added while the request is OPEN',
-          );
+          throw new ConflictException({
+            code: ErrorCode.MAINTENANCE_INVALID_STATE,
+            message: 'Images can only be added while the request is OPEN',
+          });
 
         if (locked.images.length + uploaded.length > MAINTENANCE_MAX_IMAGES)
-          throw new ConflictException(
-            `A request can have at most ${MAINTENANCE_MAX_IMAGES} images`,
-          );
+          throw new ConflictException({
+            code: ErrorCode.IMAGE_LIMIT_EXCEEDED,
+            message: `A request can have at most ${MAINTENANCE_MAX_IMAGES} images`,
+          });
 
         locked.images = [...locked.images, ...uploaded];
         await manager.save(locked);
@@ -707,15 +782,19 @@ export class MaintenanceService {
       const locked = await this.lock(manager, id);
 
       if (locked.status !== MaintenanceStatus.OPEN) {
-        throw new ConflictException(
-          'Images can only be removed while the request is OPEN',
-        );
+        throw new ConflictException({
+          code: ErrorCode.MAINTENANCE_INVALID_STATE,
+          message: 'Images can only be removed while the request is OPEN',
+        });
       }
 
       const image = locked.images.find((img) => img.publicId === publicId);
 
       if (!image) {
-        throw new NotFoundException('Image not found on this request');
+        throw new NotFoundException({
+          code: ErrorCode.IMAGE_NOT_FOUND,
+          message: 'Image not found on this request',
+        });
       }
 
       locked.images = locked.images.filter((img) => img.publicId !== publicId);
@@ -753,18 +832,20 @@ export class MaintenanceService {
     const request = await this.findForActor(actor, id);
 
     if (request.assignedStaffId !== actor.id) {
-      throw new ForbiddenException(
-        'Only the assigned staff member can edit completion images',
-      );
+      throw new ForbiddenException({
+        code: ErrorCode.NOT_ASSIGNED_STAFF,
+        message: 'Only the assigned staff member can edit completion images',
+      });
     }
 
     const removed = await this.dataSource.transaction(async (manager) => {
       const locked = await this.lock(manager, id);
 
       if (locked.status !== MaintenanceStatus.RESOLVED) {
-        throw new ConflictException(
-          'Completion images can only be removed while the request is RESOLVED',
-        );
+        throw new ConflictException({
+          code: ErrorCode.MAINTENANCE_INVALID_STATE,
+          message: 'Completion images can only be removed while the request is RESOLVED',
+        });
       }
 
       const image = locked.completionImages.find(
@@ -772,7 +853,10 @@ export class MaintenanceService {
       );
 
       if (!image) {
-        throw new NotFoundException('Image not found on this request');
+        throw new NotFoundException({
+          code: ErrorCode.IMAGE_NOT_FOUND,
+          message: 'Image not found on this request',
+        });
       }
 
       locked.completionImages = locked.completionImages.filter(

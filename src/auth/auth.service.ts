@@ -29,6 +29,7 @@ import { RefreshTokenCleanupService } from './refresh-token-cleanup.service.js';
 import { AuthTokens, RefreshTokenPayload } from './types/token.types.js';
 import { User } from '../users/entities/user.entity.js';
 import { UsersService } from '../users/users.service.js';
+import { ErrorCode } from '../common/errors/error-code.enum.js';
 
 const INVALID_OTP_MESSAGE = 'Invalid or expired verification code';
 const OTP_SEND_MESSAGE =
@@ -59,7 +60,10 @@ export class AuthService {
    */
   async register(dto: RegisterDto): Promise<MessageResponseDto> {
     if (await this.usersService.findByEmail(dto.email)) {
-      throw new ConflictException('Email is already registered');
+      throw new ConflictException({
+        code: ErrorCode.EMAIL_ALREADY_REGISTERED,
+        message: 'Email is already registered',
+      });
     }
 
     const { password, ...profile } = dto;
@@ -89,7 +93,11 @@ export class AuthService {
     );
 
     const user = valid ? await this.usersService.findByEmail(dto.email) : null;
-    if (!user) throw new BadRequestException(INVALID_OTP_MESSAGE);
+    if (!user)
+      throw new BadRequestException({
+        code: ErrorCode.INVALID_OTP,
+        message: INVALID_OTP_MESSAGE,
+      });
 
     await this.usersService.makeEmailVerified(user.id);
 
@@ -104,7 +112,10 @@ export class AuthService {
    * @returns The authenticated user and newly issued tokens.
    */
   async login(dto: LoginDto): Promise<AuthTokens & { user: User }> {
-    const invalid = new UnauthorizedException('Invalid email or password');
+    const invalid = new UnauthorizedException({
+      code: ErrorCode.INVALID_CREDENTIALS,
+      message: 'Invalid email or password',
+    });
 
     const credentials = await this.usersService.findCredentialsByEmail(
       dto.email,
@@ -125,13 +136,17 @@ export class AuthService {
     }
 
     if (!credentials.isActive) {
-      throw new ForbiddenException('This account has been deactivated');
+      throw new ForbiddenException({
+        code: ErrorCode.ACCOUNT_DEACTIVATED,
+        message: 'This account has been deactivated',
+      });
     }
 
     if (!credentials.isEmailVerified) {
-      throw new ForbiddenException(
-        'Please verify your email before logging in',
-      );
+      throw new ForbiddenException({
+        code: ErrorCode.EMAIL_NOT_VERIFIED,
+        message: 'Please verify your email before logging in',
+      });
     }
 
     const family = randomUUID();
@@ -159,7 +174,10 @@ export class AuthService {
 
       if (existing) {
         if (!existing.isActive) {
-          throw new ForbiddenException('This account has been deactivated');
+          throw new ForbiddenException({
+            code: ErrorCode.ACCOUNT_DEACTIVATED,
+            message: 'This account has been deactivated',
+          });
         }
 
         user = await this.usersService.linkGoogleAccount(
@@ -173,7 +191,10 @@ export class AuthService {
     }
 
     if (!user.isActive) {
-      throw new ForbiddenException('This account has been deactivated');
+      throw new ForbiddenException({
+        code: ErrorCode.ACCOUNT_DEACTIVATED,
+        message: 'This account has been deactivated',
+      });
     }
 
     const family = randomUUID();
@@ -203,7 +224,10 @@ export class AuthService {
       refreshToken.userId !== payload.userId ||
       refreshToken.family !== payload.family
     ) {
-      throw new UnauthorizedException('Invalid refresh token');
+      throw new UnauthorizedException({
+        code: ErrorCode.REFRESH_TOKEN_INVALID,
+        message: 'Invalid refresh token',
+      });
     }
 
     if (
@@ -212,19 +236,26 @@ export class AuthService {
     ) {
       await this.revokeFamily(refreshToken.family);
 
-      throw new UnauthorizedException(
-        'Refresh token reuse detected, please log in again',
-      );
+      throw new UnauthorizedException({
+        code: ErrorCode.REFRESH_TOKEN_REUSED,
+        message: 'Refresh token reuse detected, please log in again',
+      });
     }
 
     if (refreshToken.expiresAt.getTime() <= Date.now()) {
-      throw new UnauthorizedException('Refresh token expired');
+      throw new UnauthorizedException({
+        code: ErrorCode.REFRESH_TOKEN_EXPIRED,
+        message: 'Refresh token expired',
+      });
     }
 
     const user = await this.usersService.findById(refreshToken.userId);
 
     if (!user || !user.isActive) {
-      throw new UnauthorizedException('Account is not active');
+      throw new UnauthorizedException({
+        code: ErrorCode.ACCOUNT_INACTIVE,
+        message: 'Account is not active',
+      });
     }
 
     const tokens = await this.dataSource.transaction(async (manager) => {
@@ -244,9 +275,10 @@ export class AuthService {
     if (!tokens) {
       await this.revokeFamily(refreshToken.family);
 
-      throw new UnauthorizedException(
-        'Refresh token reuse detected, please log in again',
-      );
+      throw new UnauthorizedException({
+        code: ErrorCode.REFRESH_TOKEN_REUSED,
+        message: 'Refresh token reuse detected, please log in again',
+      });
     }
 
     return tokens;
@@ -298,7 +330,10 @@ export class AuthService {
     const user = valid ? await this.usersService.findByEmail(dto.email) : null;
 
     if (!user || !user.isActive) {
-      throw new BadRequestException(INVALID_OTP_MESSAGE);
+      throw new BadRequestException({
+        code: ErrorCode.INVALID_OTP,
+        message: INVALID_OTP_MESSAGE,
+      });
     }
 
     const passwordHash = await this.passwordService.hash(dto.newPassword);
@@ -363,9 +398,11 @@ export class AuthService {
     const credentials = await this.usersService.findCredentialsById(user.id);
 
     if (!credentials?.passwordHash) {
-      throw new BadRequestException(
-        'This account has no password yet. Use "forgot password" to set one',
-      );
+      throw new BadRequestException({
+        code: ErrorCode.NO_PASSWORD_SET,
+        message:
+          'This account has no password yet. Use "forgot password" to set one',
+      });
     }
 
     const validPassword = await this.passwordService.verify(
@@ -374,13 +411,17 @@ export class AuthService {
     );
 
     if (!validPassword) {
-      throw new BadRequestException('Current password is incorrect');
+      throw new BadRequestException({
+        code: ErrorCode.CURRENT_PASSWORD_INCORRECT,
+        message: 'Current password is incorrect',
+      });
     }
 
     if (dto.currentPassword === dto.newPassword) {
-      throw new BadRequestException(
-        'New password must be different from the current password',
-      );
+      throw new BadRequestException({
+        code: ErrorCode.PASSWORD_UNCHANGED,
+        message: 'New password must be different from the current password',
+      });
     }
 
     const currentFamily = await this.currentFamilyOf(user.id, refreshToken);
@@ -495,10 +536,16 @@ export class AuthService {
       return payload;
     } catch (error) {
       if (error instanceof TokenExpiredError) {
-        throw new UnauthorizedException('Expired refresh token');
+        throw new UnauthorizedException({
+          code: ErrorCode.REFRESH_TOKEN_EXPIRED,
+          message: 'Expired refresh token',
+        });
       }
 
-      throw new UnauthorizedException('Invalid refresh token');
+      throw new UnauthorizedException({
+        code: ErrorCode.REFRESH_TOKEN_INVALID,
+        message: 'Invalid refresh token',
+      });
     }
   }
 

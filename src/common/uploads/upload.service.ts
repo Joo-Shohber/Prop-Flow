@@ -8,6 +8,7 @@ import {
   ALLOWED_IMAGE_MIME_TYPES,
   MAX_IMAGE_SIZE_BYTES,
 } from './upload.constants.js';
+import { ErrorCode } from '../errors/error-code.enum.js';
 
 type AllowedMime = (typeof ALLOWED_IMAGE_MIME_TYPES)[number];
 
@@ -29,12 +30,16 @@ export class UploadService {
     maxCount: number,
   ): Promise<ImageRef[]> {
     if (!files.length)
-      throw new BadRequestException('At least one image is required');
+      throw new BadRequestException({
+        code: ErrorCode.IMAGE_REQUIRED,
+        message: 'At least one image is required',
+      });
 
     if (files.length > maxCount) {
-      throw new BadRequestException(
-        `A maximum of ${maxCount} images is allowed`,
-      );
+      throw new BadRequestException({
+        code: ErrorCode.IMAGE_LIMIT_EXCEEDED,
+        message: `A maximum of ${maxCount} images is allowed`,
+      });
     }
 
     return Promise.all(files.map((file) => this.uploadOne(file, folder)));
@@ -55,9 +60,10 @@ export class UploadService {
     folder: string,
   ): Promise<ImageRef> {
     if (file.size > MAX_IMAGE_SIZE_BYTES) {
-      throw new BadRequestException(
-        `${file.originalname} exceeds the ${MAX_IMAGE_SIZE_BYTES / 1024 / 1024}MB limit`,
-      );
+      throw new BadRequestException({
+        code: ErrorCode.IMAGE_TOO_LARGE,
+        message: `${file.originalname} exceeds the ${MAX_IMAGE_SIZE_BYTES / 1024 / 1024}MB limit`,
+      });
     }
 
     const detected = await fileTypeFromBuffer(file.buffer);
@@ -65,9 +71,10 @@ export class UploadService {
       !detected ||
       !ALLOWED_IMAGE_MIME_TYPES.includes(detected.mime as AllowedMime)
     ) {
-      throw new BadRequestException(
-        `${file.originalname} is not a valid image (jpeg, png or webp)`,
-      );
+      throw new BadRequestException({
+        code: ErrorCode.IMAGE_INVALID,
+        message: `${file.originalname} is not a valid image (jpeg, png or webp)`,
+      });
     }
 
     return new Promise<ImageRef>((resolve, reject) => {
